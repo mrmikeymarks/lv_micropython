@@ -52,3 +52,16 @@ echo "=== [3/5] Flashing to $PORT @ $BAUD baud ==="
 make -C "$MICROPYTHON/ports/esp32" deploy BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
     LV_CFLAGS="-DLV_COLOR_DEPTH=16" PORT="$PORT" BAUD="$BAUD"
 
+echo "=== [4/5] Installing demo as main.py ==="
+sleep 3   # give the board a moment to finish its post-flash reset
+$MPREMOTE cp "$MICROPYTHON/demos/hello_touch.py" :main.py
+
+echo "=== [5/5] Verifying ==="
+$MPREMOTE exec "import sys; print('machine :', sys.implementation._machine)"
+$MPREMOTE exec "import lvgl as lv; print('lvgl    :', lv.version_major(), '.', lv.version_minor(), '.', lv.version_patch())"
+# reboot so main.py runs the demo from a clean boot
+$MPREMOTE reset
+
+echo ""
+echo "SUCCESS: $BOARD firmware flashed to $PORT, demos/hello_touch.py running on boot."
+
