@@ -1,6 +1,14 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Show ESP32 board / variant selector menu
+# Non-interactive use: set BOARD (and optionally BOARD_VARIANT) in the
+# environment to skip the menu, e.g.  BOARD=ESP32_GENERIC ./build-esp32.sh
+
+if [ -n "${BOARD:-}" ]; then
+    BOARD_VARIANT="${BOARD_VARIANT:-}"
+    echo "Using BOARD=$BOARD BOARD_VARIANT=$BOARD_VARIANT (menu skipped)"
+    return 0 2>/dev/null || exit 0
+fi
 
 # Array of configurations
 configs=(
@@ -37,6 +45,8 @@ fi
 
 # Set BOARD and BOARD_VARIANT based on user choice
 selected_config=(${configs[$((choice-1))]})
+# BOARD=ESP32_GENERIC
+# BOARD_VARIANT=SPIRAM
 BOARD=${selected_config[0]}
 BOARD_VARIANT=${selected_config[1]:-""}
 
