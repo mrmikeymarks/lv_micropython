@@ -1,7 +1,7 @@
 # I2C bring-up companion to hw_esp32.py.
 # Importing this module configures hardware I2C(0) on the standard ESP32
 # pins, chosen to avoid the display/touch SPI wiring (see hw_esp32.py):
-#   scl=22 sda=21 @ 400kHz
+#   scl=22 sda=23 @ 400kHz
 # Usage:
 #   import i2c_esp32
 #   i2c_esp32.scan()                  # list attached device addresses
@@ -10,7 +10,7 @@
 from machine import I2C, Pin
 
 SCL = 22
-SDA = 21
+SDA = 23
 FREQ = 400_000
 
 i2c = I2C(0, scl=Pin(SCL), sda=Pin(SDA), freq=FREQ)
