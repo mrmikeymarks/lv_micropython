@@ -1,0 +1,10 @@
+{
+  "name": "nginx-node-app",
+  "version": "1.0.0",
+  "description": "Basic Node.js HTTP server fronted by nginx via docker compose",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}
