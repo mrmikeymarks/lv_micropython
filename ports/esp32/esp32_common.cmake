@@ -12,6 +12,7 @@ endif()
 include(${MICROPY_DIR}/py/py.cmake)
 
 list(APPEND USER_C_MODULES "${MICROPY_DIR}/user_modules/lv_binding_micropython/micropython.cmake")
+list(APPEND USER_C_MODULES "${MICROPY_DIR}/micropython.cmake")
 
 # CMAKE_BUILD_EARLY_EXPANSION is set during the component-discovery phase of
 # `idf.py build`, so none of the extmod/usermod (and in reality, most of the

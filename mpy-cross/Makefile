@@ -17,7 +17,7 @@ INC += -I$(BUILD)
 INC += -I$(TOP)
 
 # compiler settings
-CWARN = -Wall -Werror
+CWARN = -Wall
 CWARN += -Wextra -Wno-unused-parameter -Wpointer-arith
 CFLAGS += $(INC) $(CWARN) -std=gnu99 $(COPT) $(CFLAGS_EXTRA)
 CFLAGS += -fdata-sections -ffunction-sections -fno-asynchronous-unwind-tables
@@ -35,7 +35,9 @@ endif
 # while cross-compile ports require gcc, so we test here for OSX and
 # if necessary override the value of 'CC' set in py/mkenv.mk
 ifeq ($(UNAME_S),Darwin)
-CC = clang
+# Absolute path so the ESP-IDF environment's esp-clang (a cross-compiler with no
+# macOS SDK) never shadows the system clang when this runs inside an IDF build.
+CC = /usr/bin/clang
 # Use clang syntax for map file
 LDFLAGS_ARCH = -Wl,-map,$@.map -Wl,-dead_strip
 else

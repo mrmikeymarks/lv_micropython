@@ -1,8 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Build MicroPython-LVGL app for: Unix/Linux systems
 
-source env-variables-micropython.sh
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPTS_DIR/env-variables-micropython.sh"
 
 VARIANT=lvgl
 

@@ -1,0 +1,31 @@
+diff --git a/micropython.cmake b/micropython.cmake
+index fb9a24a..02d999c 100644
+--- a/micropython.cmake
++++ b/micropython.cmake
+@@ -51,7 +51,12 @@ if (DEFINED LV_CONF_DIR)
+     target_include_directories(usermod_lvgl INTERFACE ${LV_CONF_DIR})
+ endif()
+ 
+-file(WRITE ${LV_MP} "")
++# Placeholder so target_sources accepts LV_MP before it is generated.
++# Guarded: an unconditional write truncates the generated file on every
++# reconfigure, and ninja then skips regeneration (output newer than deps).
++if(NOT EXISTS ${LV_MP})
++    file(WRITE ${LV_MP} "")
++endif()
+ 
+ target_link_libraries(usermod_lvgl INTERFACE lvgl_interface)
+ 
+diff --git a/micropython.mk b/micropython.mk
+index a884a44..335a1cc 100644
+--- a/micropython.mk
++++ b/micropython.mk
+@@ -84,7 +84,7 @@ $(LVGL_MPY): $(ALL_LVGL_SRC) $(LVGL_BINDING_DIR)/gen/gen_mpy.py
+ 		-I $(LVGL_BINDING_DIR)/pycparser/utils/fake_libc_include \
+ 		-I $(LVGL_BINDING_DIR)/stubs/include \
+ 		$(CFLAGS_USERMOD) \
+-		$(LVGL_DIR)/lvgl_private.h > $(LVGL_PP)
++		$(LVGL_DIR)/lvgl.h > $(LVGL_PP)
+ 	$(Q)$(PYTHON) $(LVGL_BINDING_DIR)/gen/gen_mpy.py -M lvgl -MP lv -MD $(LVGL_MPY_METADATA) -E $(LVGL_PP) $(LVGL_DIR)/lvgl.h > $@
+ 
+ .PHONY: LVGL_MPY

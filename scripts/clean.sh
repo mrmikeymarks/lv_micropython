@@ -1,10 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Clear build directories
 
 ORIGINAL_DIR=$PWD
 
-source env-variables-micropython.sh
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPTS_DIR/env-variables-micropython.sh"
 
 # Clean mpy-cross
 cd $MICROPYTHON/mpy-cross
@@ -16,7 +17,7 @@ rm -rf build-*
 
 # Clean ESP32 port boards
 cd $ORIGINAL_DIR
-source env-variables-esp32.sh
+source "$SCRIPTS_DIR/env-variables-esp32.sh"
 cd $MICROPYTHON/ports/esp32
 rm -rf build-*
 
