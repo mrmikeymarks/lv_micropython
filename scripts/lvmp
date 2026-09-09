@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+
+# lvmp - one entry point for the lv_micropython ESP32/LVGL workflow.
+# Replaces the old per-task scripts; `lvmp help` lists everything.
+#
+# Board selection: pass BOARD [VARIANT] as arguments, or set BOARD /
+# BOARD_VARIANT in the environment; with neither, an interactive menu is
+# shown on a TTY. BAUD env var overrides the flashing baud (default 921600).
+
+set -euo pipefail
+
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPTS_DIR/env.sh"
+
+BAUD="${BAUD:-921600}"
+
+# ---------------------------------------------------------------- helpers --
+
+BOARDS=(
+    "ESP32_GENERIC"
+    "ESP32_GENERIC SPIRAM"
+    "ESP32_GENERIC_S3"
+    "ESP32_GENERIC_S3 SPIRAM_OCT"
+    "M5STACK_CORE2"
+    "LILYGO_TDISPLAY"
+    "LILYGO_TWATCH_2020 V1"
+    "LILYGO_TWATCH_2020 V2"
+    "LILYGO_TWATCH_2020 V3"
+)
+
+pick_board() {  # sets BOARD / BOARD_VARIANT from args, env, or menu
+    if [ $# -ge 1 ]; then
+        BOARD="$1"; BOARD_VARIANT="${2:-}"
+    elif [ -n "${BOARD:-}" ]; then
+        BOARD_VARIANT="${BOARD_VARIANT:-}"
+    elif [ -t 0 ]; then
+        echo "Select a configuration:"
+        local i
+        for i in "${!BOARDS[@]}"; do echo "$((i+1)). ${BOARDS[$i]}"; done
+        read -rp "Enter your choice (1-${#BOARDS[@]}): " i
+        [[ "$i" =~ ^[0-9]+$ ]] && [ "$i" -ge 1 ] && [ "$i" -le ${#BOARDS[@]} ] \
+            || { echo "Invalid choice." >&2; exit 1; }
+        # shellcheck disable=SC2206
+        local sel=(${BOARDS[$((i-1))]})
+        BOARD="${sel[0]}"; BOARD_VARIANT="${sel[1]:-}"
+    else
+        BOARD="ESP32_GENERIC"; BOARD_VARIANT=""
+    fi
+    echo "BOARD=$BOARD BOARD_VARIANT=${BOARD_VARIANT:-<none>}"
+}
+
+need_port() {  # sets PORT (arg wins), frees it from any attached monitor
+    PORT="${1:-$(ls /dev/cu.usbserial* 2>/dev/null | head -1 || true)}"
+    [ -n "$PORT" ] || { echo "ERROR: no /dev/cu.usbserial* device found. Plug the board in or pass a port." >&2; exit 1; }
+    local holders
+    holders="$(lsof -t "$PORT" 2>/dev/null || true)"
+    if [ -n "$holders" ]; then
+        echo "freeing $PORT (stopping pid(s): $holders)"
+        # shellcheck disable=SC2086
+        kill -INT $holders 2>/dev/null || true
+        sleep 1
+    fi
+}
+
+idf_py() {  # python from the IDF venv (falls back to system python3)
+    if [ -x "${IDF_PYTHON_ENV_PATH:-}/bin/python" ]; then
+        echo "$IDF_PYTHON_ENV_PATH/bin/python"
+    else
+        command -v python3
+    fi
+}
+
+mpr() { "$(idf_py)" "$MICROPYTHON/tools/mpremote/mpremote.py" connect "$PORT" "$@"; }
+
+# ------------------------------------------------------------- subcommands --
+
+cmd_build() {  # [BOARD] [VARIANT] - build ESP32 firmware
+    pick_board "$@"
+    espressif_env
+    make -C "$MICROPYTHON/mpy-cross"
+    make -C "$MICROPYTHON/ports/esp32" BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
+        LV_CFLAGS="-DLV_COLOR_DEPTH=16"
+}
+
+cmd_flash() {  # [BOARD] [VARIANT] [PORT] [BAUD] - build + flash + install + verify
+    pick_board "${1:-}" "${2:-}"
+    BAUD="${4:-$BAUD}"
+    espressif_env
+    echo "=== [1/6] Building mpy-cross ==="
+    make -C "$MICROPYTHON/mpy-cross"
+    echo "=== [2/6] Building firmware ==="
+    make -C "$MICROPYTHON/ports/esp32" BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
+        LV_CFLAGS="-DLV_COLOR_DEPTH=16"
+    need_port "${3:-}"
+    echo "=== [3/6] Flashing to $PORT @ $BAUD baud ==="
+    make -C "$MICROPYTHON/ports/esp32" deploy BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
+        LV_CFLAGS="-DLV_COLOR_DEPTH=16" PORT="$PORT" BAUD="$BAUD"
+    echo "=== [4/6] Installing demo as main.py ==="
+    sleep 3   # let the board finish its post-flash reset
+    mpr cp "$MICROPYTHON/demos/hello_touch.py" :main.py
+    echo "=== [5/6] Verifying ==="
+    mpr exec "import sys; print('machine :', sys.implementation._machine)"
+    mpr exec "import lvgl as lv; print('lvgl    :', lv.version_major(), '.', lv.version_minor(), '.', lv.version_patch())"
+    mpr reset
+    echo "=== [6/6] Installing portfolio app ==="
+    "$MICROPYTHON/apps/portfolio/install.sh" "$PORT"
+    echo ""
+    echo "SUCCESS: $BOARD firmware flashed to $PORT, portfolio app installed and running on boot."
+}
+
+cmd_deploy() {  # [BOARD] [PORT] [BAUD] [--full] - esptool fast flash of an existing build
+    local full=0 args=()
+    local a
+    for a in "$@"; do
+        [ "$a" = "--full" ] && full=1 || args+=("$a")
+    done
+    local board="${args[0]:-ESP32_GENERIC}"
+    BAUD="${args[2]:-$BAUD}"
+    local build_dir="$MICROPYTHON/ports/esp32/build-$board"
+    [ -f "$build_dir/micropython.bin" ] || { echo "ERROR: $build_dir/micropython.bin not found - build first (lvmp build)." >&2; exit 1; }
+    need_port "${args[1]:-}"
+    espressif_env >/dev/null 2>&1 || true   # only need the venv python
+    local chip
+    chip="$(sed -n 's/^CONFIG_IDF_TARGET="\(.*\)"$/\1/p' "$build_dir/sdkconfig" | head -1)"
+    cd "$build_dir"
+    if [ "$full" = "1" ]; then
+        echo "=== full flash (bootloader + partitions + app) to $PORT @ $BAUD ==="
+        exec "$(idf_py)" -m esptool --chip "${chip:-esp32}" --port "$PORT" -b "$BAUD" \
+            --before default_reset --after hard_reset write_flash "@flash_args"
+    else
+        echo "=== app-only flash to $PORT @ $BAUD ==="
+        local off
+        off="$(awk '$2 == "micropython.bin" {print $1}' flash_args)"
+        exec "$(idf_py)" -m esptool --chip "${chip:-esp32}" --port "$PORT" -b "$BAUD" \
+            --before default_reset --after hard_reset write_flash \
+            --flash_mode keep --flash_freq keep --flash_size keep \
+            "${off:-0x10000}" micropython.bin
+    fi
+}
+
+cmd_erase() {  # [BOARD] [VARIANT] - erase the board's flash
+    pick_board "$@"
+    espressif_env
+    make -C "$MICROPYTHON/ports/esp32" erase BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT"
+}
+
+cmd_dev() {  # [FILE] [PORT] - push FILE as main.py (optional), reset, watch serial
+    local file="${1:-}"
+    need_port "${2:-}"
+    espressif_env >/dev/null 2>&1 || true
+    if [ -n "$file" ]; then
+        [ -f "$file" ] || { echo "ERROR: $file not found." >&2; exit 1; }
+        echo "=== pushing $file -> :main.py ==="
+        mpr cp "$file" :main.py
+    fi
+    echo "=== attaching monitor (reset -> boot; Ctrl-C to detach) ==="
+    exec "$(idf_py)" "$SCRIPTS_DIR/monitor-serial.py" --reset "$PORT"
+}
+
+cmd_log() {  # [--reset] [--timestamps] [PORT] [BAUD] - serial monitor, no code push
+    espressif_env >/dev/null 2>&1 || true
+    exec "$(idf_py)" "$SCRIPTS_DIR/monitor-serial.py" "$@"
+}
+
+cmd_sim() {  # [FILE ...] - LVGL demo in the desktop simulator (SDL window)
+    local bin="$MICROPYTHON/ports/unix/build-lvgl/micropython"
+    if [ ! -x "$bin" ]; then
+        echo "=== first run: building the desktop simulator (unix port, VARIANT=lvgl) ==="
+        make -C "$MICROPYTHON/mpy-cross"
+        make -C "$MICROPYTHON/ports/unix" submodules VARIANT=lvgl
+        make -C "$MICROPYTHON/ports/unix" VARIANT=lvgl
+    fi
+    exec "$bin" "$@"
+}
+
+cmd_share() {  # FILE [--branch] - online-simulator link for a committed demo
+    local repo="mrmikeymarks/lv_micropython"
+    local sim="https://sim.lvgl.io/v9.0/micropython/ports/webassembly/index.html"
+    local file="${1:?usage: lvmp share demos/<file>.py [--branch]}"
+    cd "$MICROPYTHON"
+    local rel ref
+    rel="$(python3 -c "import os,sys; print(os.path.relpath(os.path.abspath(sys.argv[1]), os.getcwd()))" "$file")"
+    [ -f "$rel" ] || { echo "ERROR: $rel not found in repo" >&2; exit 1; }
+    if [ "${2:-}" = "--branch" ]; then
+        ref="$(git rev-parse --abbrev-ref HEAD)"
+    else
+        ref="$(git rev-parse HEAD)"
+        git diff --quiet HEAD -- "$rel" 2>/dev/null \
+            || echo "WARNING: $rel has uncommitted changes; the link serves the committed version." >&2
+    fi
+    git ls-remote --exit-code origin "refs/heads/$(git rev-parse --abbrev-ref HEAD)" >/dev/null 2>&1 \
+        || echo "WARNING: current branch not found on origin - push before sharing." >&2
+    local url="${sim}?script=https://raw.githubusercontent.com/${repo}/${ref}/${rel}"
+    echo "$url"
+    command -v pbcopy >/dev/null && printf '%s' "$url" | pbcopy && echo "(copied to clipboard)" >&2
+}
+
+cmd_install() {  # [PORT] [--source] - install the portfolio app to the board
+    exec "$MICROPYTHON/apps/portfolio/install.sh" "$@"
+}
+
+cmd_build_unix() {  # build the desktop lvgl unix port
+    make -C "$MICROPYTHON/mpy-cross"
+    make -C "$MICROPYTHON/ports/unix" VARIANT=lvgl
+}
+
+cmd_clean() {  # remove all build directories (mpy-cross, unix, esp32, rp2)
+    local d
+    for d in mpy-cross ports/unix ports/esp32 ports/rp2; do
+        rm -rf "$MICROPYTHON/$d"/build-*
+    done
+    echo "cleaned build dirs under mpy-cross, ports/{unix,esp32,rp2}"
+}
+
+cmd_fix_venv() {  # re-apply pip pins that keep IDF v5.2.2's checker working
+    espressif_env >/dev/null 2>&1 || true
+    local py="$IDF_TOOLS_PATH/python_env/idf5.2_py3.9_env/bin/python"
+    [ -x "$py" ] || { echo "ERROR: idf5.2 venv not found under $IDF_TOOLS_PATH/python_env" >&2; exit 1; }
+    # IDF 5.2's pkg_resources-based check cannot read 2026-era metadata, and
+    # setuptools >= 81 removed pkg_resources entirely. Re-run after any
+    # re-run of v5.2.2/esp-idf/install.sh (which undoes these pins).
+    "$py" -m pip install -q "setuptools>=75,<81" "ruamel.yaml<0.18" "ruamel.yaml.clib==0.2.8"
+    echo "OK: idf5.2 venv pins applied"
+}
+
+cmd_help() {
+    cat <<'EOF'
+lvmp <command> [args]
+
+  build   [BOARD] [VARIANT]           build ESP32 firmware (menu on a TTY if no board)
+  flash   [BOARD] [VARIANT] [PORT] [BAUD]
+                                      full pipeline: build, flash, verify, install portfolio
+  deploy  [BOARD] [PORT] [BAUD] [--full]
+                                      fast esptool flash of an existing build (app-only by default)
+  erase   [BOARD] [VARIANT]           erase the board's flash
+  install [PORT] [--source]           install the portfolio app only
+  dev     [FILE] [PORT]               push FILE as main.py, reset, watch serial
+  log     [--reset] [--timestamps] [PORT] [BAUD]
+                                      serial monitor (auto-reconnects)
+  sim     [FILE ...]                  desktop simulator (SDL); builds it on first use
+  share   FILE [--branch]             online-simulator link for a committed demo
+  build-unix                          build the desktop lvgl unix port
+  clean                               remove all build dirs
+  fix-venv                            re-apply IDF v5.2.2 python-venv pip pins
+  env                                 how to get idf.py into your current shell
+
+Board via env: BOARD=... [BOARD_VARIANT=...] lvmp build   BAUD=460800 for weak adapters.
+EOF
+}
+
+case "${1:-help}" in
+    build)       shift; cmd_build "$@" ;;
+    flash|all)   shift; cmd_flash "$@" ;;
+    deploy)      shift; cmd_deploy "$@" ;;
+    erase)       shift; cmd_erase "$@" ;;
+    dev)         shift; cmd_dev "$@" ;;
+    log|monitor) shift; cmd_log "$@" ;;
+    sim)         shift; cmd_sim "$@" ;;
+    share)       shift; cmd_share "$@" ;;
+    install)     shift; cmd_install "$@" ;;
+    build-unix)  shift; cmd_build_unix "$@" ;;
+    clean)       shift; cmd_clean "$@" ;;
+    fix-venv)    shift; cmd_fix_venv "$@" ;;
+    env)         echo 'source scripts/env.sh && espressif_env   # puts idf.py on PATH in THIS shell' ;;
+    help|-h|--help) cmd_help ;;
+    *) echo "lvmp: unknown command '$1' (try: lvmp help)" >&2; exit 1 ;;
+esac

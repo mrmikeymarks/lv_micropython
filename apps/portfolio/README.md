@@ -17,6 +17,12 @@ the header arrows or swipe left/right.
 | 9 | Interests | Hobby tiles with enthusiasm meters |
 | 10 | Contact | Email/site/GitHub + scannable QR code |
 
+> **Frozen variant:** the same app also exists as flat frozen modules in
+> `ports/esp32/modules/` (`portfolio_*.py` + `portfolio_pages/`), built into the firmware so no
+> RAM is spent on bytecode. Boot it with a one-line filesystem `main.py`:
+> `import portfolio_main`. Keep the two variants in sync (each file's
+> header says which source it derives from).
+
 ## Make it yours
 
 All content lives in [portfolio/data.py](portfolio/data.py) — name, skills,
@@ -28,7 +34,7 @@ change. Icons are `lv.SYMBOL` names stored as strings.
 Flash lv_micropython firmware first (drivers are frozen in):
 
 ```bash
-./scripts/run-esp32-all.sh
+./scripts/lvmp flash
 ```
 
 Then install the app (from `apps/portfolio/`):
@@ -68,7 +74,7 @@ Two harnesses, both must exit 0:
 This local binary is the reference implementation: it is built from the
 same `lv_binding_micropython` checkout (LVGL 9.3) the ESP32 firmware is
 built from, so what passes here is what runs on the device. The online
-simulator (sim.lvgl.io, used by `scripts/share-demo.sh` for single-file
+simulator (sim.lvgl.io, used by `scripts/lvmp share` for single-file
 demos) is frozen at LVGL 9.0 and is **not** API-congruent — e.g. chart and
 qrcode APIs differ — so it is not a verification target for this app.
 

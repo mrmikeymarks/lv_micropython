@@ -5,15 +5,15 @@ unchanged in three places:
 
 | Target | Command | What renders |
 |---|---|---|
-| Desktop simulator | `sim.sh demos/hello_touch.py` | SDL window on the Mac, mouse = touch. LVGL **9.3** — identical to the firmware. First run builds the simulator once (~5-10 min). |
+| Desktop simulator | `lvmp sim demos/hello_touch.py` | SDL window on the Mac, mouse = touch. LVGL **9.3** — identical to the firmware. First run builds the simulator once (~5-10 min). |
 | ESP32 device | `dev.sh demos/hello_touch.py` | Pushed as `main.py`, board resets, serial output streams. Hardware wiring lives in the frozen `hw_esp32` module — demos never mention pins. |
-| Online simulator (client links) | `share-demo.sh demos/hello_touch.py` | Prints a `sim.lvgl.io` URL that auto-loads the script from this public repo. No login. Openable on phones (desktop-width page — pinch-zoom). |
+| Online simulator (client links) | `lvmp share demos/hello_touch.py` | Prints a `sim.lvgl.io` URL that auto-loads the script from this public repo. No login. Openable on phones (desktop-width page — pinch-zoom). |
 
 ## Workflow
 
-1. Edit the demo, iterate with `sim.sh` (instant, no hardware).
+1. Edit the demo, iterate with `lvmp sim` (instant, no hardware).
 2. Sanity-check on the device with `dev.sh` when it matters.
-3. Commit + push, then `share-demo.sh` for a client link. SHA-pinned links
+3. Commit + push, then `lvmp share` for a client link. SHA-pinned links
    never change behind a client's back; use `--branch` for a live link.
 
 ## The one rule: stay inside LVGL 9.0 APIs in shared demos
@@ -49,4 +49,4 @@ fetches exactly one URL.
   per demo. A mobile-first self-hosted viewer is a possible phase 2.
 - The sim's own "Save/share" button is broken upstream (expired TLS cert on
   its snippet backend since 2024) — only `?script=<raw URL>` links work,
-  which is what `share-demo.sh` generates.
+  which is what `lvmp share` generates.

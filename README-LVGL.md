@@ -89,7 +89,7 @@ Python 3 is required, but you can install some other version of python3 instead 
 
 Install ESP-IDF v5.x: https://docs.espressif.com/projects/esp-idf/en/v5.2.3/esp32/get-started/index.html#manual-installation
 
-(you can configure ESP-IDF path in [scripts/env-variables-esp32.sh](./scripts/env-variables-esp32.sh) file)
+(you can configure the ESP-IDF path in [scripts/env.sh](./scripts/env.sh))
 
 Build and deploy with scripts:
 

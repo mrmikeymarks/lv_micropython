@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Install the portfolio app onto a board already running lv_micropython
-# firmware (see scripts/run-esp32-all.sh for building/flashing that).
+# firmware (see `scripts/lvmp flash` for building/flashing that).
 #
 # Usage:
 #   install.sh [PORT] [--source]
