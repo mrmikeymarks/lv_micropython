@@ -135,6 +135,11 @@ class PortfolioApp:
             gc.collect()
             ui.label(self.content, "not enough memory\nfor this page",
                      ui.FONT_M, ui.WARN).center()
+        except OSError:
+            # content file removed/replaced after start-up
+            self.content.clean()
+            ui.label(self.content, "content file\nnot readable",
+                     ui.FONT_M, ui.WARN).center()
         self.lbl_title.set_text(self.pages[index][0])
         self.lbl_count.set_text("%d/%d" % (index + 1, len(self.pages)))
 

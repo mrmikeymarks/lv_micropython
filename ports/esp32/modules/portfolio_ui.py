@@ -10,7 +10,7 @@ import lvgl as lv
 
 MAX_ELEMENTS = 7    # per page
 MAX_LINE = 400      # bytes; longer content lines are truncated
-MAX_OBJECTS = 90    # estimated widgets per page; above this the page is refused
+MAX_OBJECTS = 72    # estimated widgets per page (fuzz-calibrated: 84+ crashes LVGL at 110 KB)
 MAX_ITEMS = {       # items rendered per element (the rest becomes "+N more")
     "stats": 4, "list": 8, "meters": 8, "chips": 16, "grid": 8, "chart": 16,
 }
@@ -232,7 +232,10 @@ def read_lines(path, offset=0):
                 chunk = f.read(256)
                 if chunk:
                     buf += chunk
-                    if k < 0 and len(buf) > MAX_LINE:
+                    # Over-long line: keep its head, drop the rest - but only
+                    # while the buffer holds NO line ending at all, otherwise
+                    # the lines/headers behind it in this chunk would vanish.
+                    if len(buf) > MAX_LINE and buf.find(b"\n") < 0 and buf.find(b"\r") < 0:
                         if keep is None:
                             keep = buf[:MAX_LINE]
                         pos += len(buf)
@@ -310,7 +313,8 @@ def el_stats(parent, f, ctx):
     f, dropped = items(f, "stats")
     r = row(parent, 6)
     for item in f:
-        value, name = split_kv(item)
+        value, _, name = item.partition(":")
+        value, name = value.strip(), name.strip()
         tile = card(r)
         tile.set_flex_grow(1)
         tile.set_flex_flow(lv.FLEX_FLOW.COLUMN)
@@ -565,6 +569,10 @@ def parse(line):
 # Rough widgets-per-element, after item caps: keeps a page's LVGL footprint
 # bounded so allocation can't fail inside LVGL (which would crash, not raise).
 def estimate(kind, fields):
+    return _widgets(kind, fields) + sum(len(f) for f in fields) // 80  # long text costs RAM too
+
+
+def _widgets(kind, fields):
     n = len(fields)
     cap = MAX_ITEMS.get(kind, 64)
     m = min(n, cap)
@@ -573,7 +581,7 @@ def estimate(kind, fields):
     if kind == "list": return 4 * m + 1
     if kind == "meters": return 5 * m + 1
     if kind == "chips": return 2 * min(max(n - 1, 0), cap) + 4
-    if kind == "card": return 12 + 2 * min(len(fields[2].split(",")) if n > 2 else 0, 4)
+    if kind == "card": return 10 + 2 * min(len(fields[2].split(",")) if n > 2 else 0, 4)
     if kind == "step": return 8
     if kind == "chart": return 3 + min(len(fields[1].split(",")) if n > 1 else 0, cap)
     if kind == "media": return 6
