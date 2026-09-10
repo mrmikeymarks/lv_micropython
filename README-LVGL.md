@@ -178,29 +178,27 @@ keyboard.set_display(display)
 keyboard.set_group(group)
 ```
 
-Here is an alternative example, for registering ILI9341 drivers on Micropython ESP32 port:
+Here is the equivalent for the ESP32 port with the 2.8" ILI9341 + XPT2046
+SPI module. The wiring and driver setup live in one frozen module,
+`hw_esp32`, so UI code never touches pins:
 
 ```python
 import lvgl as lv
+import hw_esp32          # display + touch + LVGL event loop, ready to use
 
-# Import ILI9341 driver and initialized it
-
-from ili9341 import ili9341
-disp = ili9341()
-
-# Import XPT2046 driver and initialize it
-
-from xpt2046 import xpt2046
-touch = xpt2046()
+print(hw_esp32.disp.width, hw_esp32.disp.height)   # 320 240
 ```
 
-By default, both ILI9341 and XPT2046 are initialized on the same SPI bus with the following parameters:
+Under the hood it uses the binding's generic pure-Python drivers, `ili9xxx`
+and `xpt2046` (both frozen into the firmware), on SPI2 at 24 MHz:
 
-- ILI9341: `miso=5, mosi=18, clk=19, cs=13, dc=12, rst=4, power=14, backlight=15, spihost=esp.HSPI_HOST, mhz=40, factor=4, hybrid=True`
-- XPT2046: `cs=25, spihost=esp.HSPI_HOST, mhz=5, max_cmds=16, cal_x0 = 3783, cal_y0 = 3948, cal_x1 = 242, cal_y1 = 423, transpose = True, samples = 3`
+- `sck=19 mosi=18 miso=5` | display `cs=13 dc=12 rst=4 bl=15`, panel power
+  on pin 14 | touch `cs=25`
 
-You can change any of these parameters on ili9341/xpt2046 constructor.
-You can also initialize them on different SPI buses if you want, by providing miso/mosi/clk parameters. Set them to -1 to use existing (initialized) spihost bus.
+Different wiring or panel? Edit `ports/esp32/modules/hw_esp32.py` (the
+constructors are `ili9xxx.Ili9341(spi=..., cs=, dc=, rst=, bl=, factor=,
+doublebuffer=)` and `xpt2046.Xpt2046(spi=..., cs=, rot=)`), or construct
+them yourself the same way in your own script.
 
 Now you can create the GUI itself:
 

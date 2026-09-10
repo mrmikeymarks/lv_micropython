@@ -223,6 +223,73 @@ cmd_fix_venv() {  # re-apply pip pins that keep IDF v5.2.2's checker working
     echo "OK: idf5.2 venv pins applied"
 }
 
+cmd_boards() {  # "BOARD VARIANT" per line (used by tab completion)
+    printf '%s\n' "${BOARDS[@]}"
+}
+
+cmd_completion() {  # zsh|bash - print a completion script:  eval "$(lvmp completion zsh)"
+    case "${1:-}" in
+    zsh) cat <<'EOF'
+_lvmp() {
+    local -a cmds boards ports
+    cmds=(
+        'build:build ESP32 firmware' 'flash:build + flash + verify + install'
+        'deploy:fast esptool flash of an existing build' 'erase:erase the board flash'
+        'install:install the portfolio app' 'dev:push FILE as main.py, watch serial'
+        'log:serial monitor' 'sim:desktop simulator' 'share:online-simulator link'
+        'build-unix:build the desktop unix port' 'clean:remove build dirs'
+        'fix-venv:re-apply IDF venv pip pins' 'env:idf.py in this shell' 'help:show help'
+    )
+    (( CURRENT == 2 )) && { _describe 'lvmp command' cmds; return; }
+    boards=(${(f)"$(lvmp boards 2>/dev/null | awk '{print $1}' | sort -u)"})
+    ports=(/dev/cu.usbserial*(N))
+    case $words[2] in
+        build|erase|flash)
+            case $CURRENT in
+                3) _describe 'board' boards ;;
+                4) local -a vars
+                   vars=(${(f)"$(lvmp boards 2>/dev/null | awk -v b="$words[3]" '$1==b && $2 {print $2}')"})
+                   _describe 'variant' vars ;;
+                5) _describe 'port' ports ;;
+            esac ;;
+        deploy)  _describe 'board' boards; _describe 'port' ports; _values 'flag' '--full' ;;
+        dev)     (( CURRENT == 3 )) && _files -g '*.py'; (( CURRENT == 4 )) && _describe 'port' ports ;;
+        sim|share) _files -g '*.py' ;;
+        install) _describe 'port' ports; _values 'flag' '--source' ;;
+        log)     _values 'flag' '--reset' '--timestamps'; _describe 'port' ports ;;
+    esac
+}
+compdef _lvmp lvmp
+EOF
+    ;;
+    bash) cat <<'EOF'
+_lvmp() {
+    local cur=${COMP_WORDS[COMP_CWORD]} cmd=${COMP_WORDS[1]:-}
+    local cmds="build flash deploy erase install dev log sim share build-unix clean fix-venv env help"
+    if [ "$COMP_CWORD" -eq 1 ]; then COMPREPLY=($(compgen -W "$cmds" -- "$cur")); return; fi
+    local boards ports
+    boards=$(lvmp boards 2>/dev/null | awk '{print $1}' | sort -u)
+    ports=$(ls /dev/cu.usbserial* 2>/dev/null)
+    case $cmd in
+        build|erase|flash)
+            case $COMP_CWORD in
+                2) COMPREPLY=($(compgen -W "$boards" -- "$cur")) ;;
+                3) COMPREPLY=($(compgen -W "$(lvmp boards 2>/dev/null | awk -v b="${COMP_WORDS[2]}" '$1==b && $2 {print $2}')" -- "$cur")) ;;
+                4) COMPREPLY=($(compgen -W "$ports" -- "$cur")) ;;
+            esac ;;
+        deploy)  COMPREPLY=($(compgen -W "$boards $ports --full" -- "$cur")) ;;
+        dev|sim|share) COMPREPLY=($(compgen -f -X '!*.py' -- "$cur") $(compgen -W "$ports" -- "$cur")) ;;
+        install) COMPREPLY=($(compgen -W "$ports --source" -- "$cur")) ;;
+        log)     COMPREPLY=($(compgen -W "--reset --timestamps $ports" -- "$cur")) ;;
+    esac
+}
+complete -F _lvmp lvmp
+EOF
+    ;;
+    *) echo "usage: eval \"\$(lvmp completion zsh|bash)\"" >&2; exit 1 ;;
+    esac
+}
+
 cmd_help() {
     cat <<'EOF'
 lvmp <command> [args]
@@ -243,6 +310,7 @@ lvmp <command> [args]
   clean                               remove all build dirs
   fix-venv                            re-apply IDF v5.2.2 python-venv pip pins
   env                                 how to get idf.py into your current shell
+  completion zsh|bash                 print a tab-completion script:  eval "$(lvmp completion zsh)"
 
 Board via env: BOARD=... [BOARD_VARIANT=...] lvmp build   BAUD=460800 for weak adapters.
 EOF
@@ -261,6 +329,8 @@ case "${1:-help}" in
     build-unix)  shift; cmd_build_unix "$@" ;;
     clean)       shift; cmd_clean "$@" ;;
     fix-venv)    shift; cmd_fix_venv "$@" ;;
+    boards)      shift; cmd_boards "$@" ;;
+    completion)  shift; cmd_completion "$@" ;;
     env)         echo 'source scripts/env.sh && espressif_env   # puts idf.py on PATH in THIS shell' ;;
     help|-h|--help) cmd_help ;;
     *) echo "lvmp: unknown command '$1' (try: lvmp help)" >&2; exit 1 ;;

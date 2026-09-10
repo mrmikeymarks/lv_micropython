@@ -1,5 +1,5 @@
 # Device entry point: bring up the 2.8" ILI9341 + XPT2046 module and run the
-# portfolio. Wiring matches the repo's README-default hello_lvgl_main.py:
+# portfolio. Wiring matches the repo's README-default hw_esp32.py:
 #   sck=19 mosi=18 miso=5 | display cs=13 dc=12 rst=4 bl=15 | touch cs=25
 #   panel power on pin 14
 # Drivers (ili9xxx, xpt2046, lv_utils) are frozen into the firmware.

@@ -20,8 +20,10 @@ the header arrows or swipe left/right.
 > **Frozen variant:** the same app also exists as flat frozen modules in
 > `ports/esp32/modules/` (`portfolio_*.py` + `portfolio_pages/`), built into the firmware so no
 > RAM is spent on bytecode. Boot it with a one-line filesystem `main.py`:
-> `import portfolio_main`. Keep the two variants in sync (each file's
-> header says which source it derives from).
+> `import portfolio_main` (starts immediately) or `import portfolio_launcher`
+> (standby screen; the BOOT button on GPIO0 starts it — pin configurable,
+> but not 13/25, those are the display/touch chip-selects). Keep the two
+> variants in sync (each file's header says which source it derives from).
 
 ## Make it yours
 
