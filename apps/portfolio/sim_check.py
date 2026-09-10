@@ -8,8 +8,10 @@
 # MAX_ELEMENTS per page, non-ASCII text, unknown lv.SYMBOL names.
 # Render check: per-page object count, build time, heap cost, widgets
 # poking past the usable width, and navigation wrap-around with the same
-# low-memory guards the device uses. Run with -X heapsize=110k to mirror a
-# no-PSRAM ESP32. Exit code 0 = clean.
+# low-memory guards the device uses. Run with -X heapsize=120k (and
+# PORTFOLIO_MODULES, below) to mirror a 110 KB no-PSRAM ESP32: this process
+# is ~10 KB heavier than the board and holds the engine bytecode in RAM,
+# which the frozen firmware doesn't. Exit code 0 = clean.
 
 import sys
 import os
@@ -49,32 +51,49 @@ def fail(msg):
 
 # ---- 1. content lint --------------------------------------------------------
 
-SYMBOL_FIELDS = {"list": 0, "media": 0, "grid": 0}  # kind -> field index holding SYMBOL:...
-page_no, count, title = 0, 0, ""
-with open(path) as f:
-    for n, raw in enumerate(f, 1):
-        if any(ord(c) > 127 for c in raw):
-            fail("line %d: non-ASCII character (fonts have no such glyph)" % n)
-        if raw.startswith("= "):
-            page_no += 1
-            count, title = 0, raw[2:].strip()
-            continue
-        p = ui.parse(raw)
-        if not p:
-            continue
-        kind, fields = p
-        count += 1
-        if kind not in ui.RENDERERS:
-            fail("line %d (%s): unknown element kind %r" % (n, title, kind))
-        if count == ui.MAX_ELEMENTS + 1:
-            fail("page %r: more than %d elements" % (title, ui.MAX_ELEMENTS))
-        if kind in ("list", "grid"):
-            for item in fields:
-                sym = item.split(":", 1)[0].strip()
-                if not hasattr(lv.SYMBOL, sym):
-                    fail("line %d: unknown symbol %r" % (n, sym))
-        elif kind == "media" and fields and not hasattr(lv.SYMBOL, fields[0]):
-            fail("line %d: unknown symbol %r" % (n, fields[0]))
+# Uses the engine's own reader/parser so the lint sees exactly what the
+# device will render (same line-ending, BOM, truncation and cap rules).
+page_no, count, title, cost = 0, 0, "", 0
+for n, (nxt, raw) in enumerate(ui.read_lines(path), 1):
+    if len(raw) >= ui.MAX_LINE:
+        fail("line %d: longer than %d bytes (truncated on the device)" % (n, ui.MAX_LINE))
+    if ui.is_header(raw):
+        if page_no and cost > ui.MAX_OBJECTS:
+            fail("page %r: about %d widgets, max %d (refused on the device)" % (title, cost, ui.MAX_OBJECTS))
+        page_no += 1
+        count, title, cost = 0, ui.header_title(raw), 0
+        continue
+    p = ui.parse(raw)
+    if not p:
+        continue
+    kind, fields = p
+    count += 1
+    if page_no == 0:
+        fail("line %d: content before the first '= Title' header is ignored" % n)
+    if kind not in ui.RENDERERS:
+        fail("line %d (%s): unknown element kind %r" % (n, title, kind))
+        continue
+    cost += ui.estimate(kind, fields)
+    if count == ui.MAX_ELEMENTS + 1:
+        fail("page %r: more than %d elements" % (title, ui.MAX_ELEMENTS))
+    if kind in ui.NEEDS_FIELDS and not any(fields):
+        fail("line %d (%s): empty %s element" % (n, title, kind))
+    cap = ui.MAX_ITEMS.get(kind)
+    n_items = len(fields) - (1 if kind == "chips" else 0)
+    if cap and n_items > cap:
+        fail("line %d (%s): %s has %d items, only %d are shown" % (n, title, kind, n_items, cap))
+    syms = ([f.split(":", 1)[0].strip() for f in fields if ":" in f] if kind in ("list", "grid")
+            else fields[:1] if kind == "media" else [])
+    for sym in syms:
+        if not ui.symbol_known(sym):
+            fail("line %d (%s): unknown symbol %r (shows a generic icon)" % (n, title, sym))
+if page_no and cost > ui.MAX_OBJECTS:
+    fail("page %r: about %d widgets, max %d (refused on the device)" % (title, cost, ui.MAX_OBJECTS))
+if page_no == 0:
+    fail("no '= Title' page headers found")
+raw_bytes = open(path, "rb").read()
+if any(b > 127 for b in raw_bytes):
+    fail("file contains non-ASCII bytes (rendered as '?': the fonts have no such glyphs)")
 print("lint: %d pages in %s, %d problem(s)" % (page_no, path, failures))
 
 

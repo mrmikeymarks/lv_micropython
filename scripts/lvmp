@@ -74,9 +74,18 @@ mpr() { "$(idf_py)" "$MICROPYTHON/tools/mpremote/mpremote.py" connect "$PORT" "$
 
 # ------------------------------------------------------------- subcommands --
 
+drop_empty_lv_mp() {  # a killed generator leaves a 0-byte lv_mp.c that ninja then trusts
+    local f="$MICROPYTHON/ports/esp32/build-$BOARD${BOARD_VARIANT:+-$BOARD_VARIANT}/lv_mp.c"
+    if [ -f "$f" ] && [ ! -s "$f" ]; then
+        echo "removing empty $f (interrupted binding generation)"
+        rm -f "$f"
+    fi
+}
+
 cmd_build() {  # [BOARD] [VARIANT] - build ESP32 firmware
     pick_board "$@"
     espressif_env
+    drop_empty_lv_mp
     make -C "$MICROPYTHON/mpy-cross"
     make -C "$MICROPYTHON/ports/esp32" BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
         LV_CFLAGS="-DLV_COLOR_DEPTH=16"
@@ -86,6 +95,7 @@ cmd_flash() {  # [BOARD] [VARIANT] [PORT] [BAUD] - build + flash + install + ver
     pick_board "${1:-}" "${2:-}"
     BAUD="${4:-$BAUD}"
     espressif_env
+    drop_empty_lv_mp
     echo "=== [1/6] Building mpy-cross ==="
     make -C "$MICROPYTHON/mpy-cross"
     echo "=== [2/6] Building firmware ==="

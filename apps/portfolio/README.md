@@ -54,18 +54,30 @@ USER_C_MODULES=$PWD/user_modules`), from `apps/portfolio/`:
 - `sim_check.py [file] [page]` — lints the content (unknown element kinds,
   more than 7 per page, non-ASCII, unknown `lv.SYMBOL` names), then builds
   every page headless and reports objects, build time, heap cost, widgets
-  spilling past the screen edge, and navigation wrap-around. Run with
-  `-X heapsize=110k` (and `PORTFOLIO_MODULES` pointing at mpy-cross output)
-  to mirror a no-PSRAM board.
+  spilling past the screen edge, and navigation wrap-around. To mirror a
+  no-PSRAM board run it with `-X heapsize=120k` and `PORTFOLIO_MODULES`
+  pointing at mpy-cross output of the engine: the emulator process is
+  ~10 KB heavier than the board (harness bookkeeping) and loads the
+  engine's bytecode into RAM, which the frozen firmware doesn't — so 120k
+  here is a conservative stand-in for a 110 KB device heap.
 - `emu_check.py [file]` — resolves every `lv.*` name in the engine against
   the running binding (catches v8-era API), then click-walks the real
   prev/next buttons through the page ring both ways and fires click events
   on every clickable widget.
 
-## Memory
+## Memory and robustness
 
 The engine keeps ≥24 KB free before building a page and ≥12 KB after;
 otherwise it shows a "not enough memory" notice (still navigable) instead
 of thrashing. Measure your board with
 `mpremote exec "import gc; gc.collect(); print(gc.mem_free())"`.
-Fonts are montserrat 14/16/24, ASCII + `lv.SYMBOL` glyphs only.
+
+The content file is treated as untrusted input (it was fuzzed with ~700
+hostile files): any line endings or a BOM are accepted, non-ASCII bytes
+render as `?` (the fonts — montserrat 14/16/24 — only have ASCII and
+`lv.SYMBOL` glyphs), lines are capped at 400 bytes, numbers are clamped,
+symbol names are vetted before lookup, each element shows at most a fixed
+number of items (`+N more` beyond that), and a page whose estimated widget
+count exceeds 90 is refused with a notice rather than letting LVGL run out
+of memory mid-build (which crashes without a Python exception). Mistakes
+always render as a visible warning label, never as a dead board.

@@ -8,7 +8,12 @@
 
 import lvgl as lv
 
-MAX_ELEMENTS = 7
+MAX_ELEMENTS = 7    # per page
+MAX_LINE = 400      # bytes; longer content lines are truncated
+MAX_OBJECTS = 90    # estimated widgets per page; above this the page is refused
+MAX_ITEMS = {       # items rendered per element (the rest becomes "+N more")
+    "stats": 4, "list": 8, "meters": 8, "chips": 16, "grid": 8, "chart": 16,
+}
 
 # ---- palette / fonts ---------------------------------------------------
 
@@ -152,21 +157,121 @@ def dot(parent, size, color):
     return d
 
 
+def symbol_known(name):
+    """True if `name` is a real lv.SYMBOL. Names are vetted before any
+    attribute lookup: symbols are short UPPER_CASE identifiers, so 256+ char
+    names (which make getattr raise), dunders (which return non-strings)
+    and lower-case junk never reach the binding. A syntactically valid
+    typo still interns one qstr (~130 B), bounded by the typos in the file
+    - cheaper than keeping a whitelist of every name resident on a tiny heap."""
+    if not 1 <= len(name) <= 24 or name[0] == "_":
+        return False
+    for c in name:
+        if not ("A" <= c <= "Z" or "0" <= c <= "9" or c == "_"):
+            return False
+    return hasattr(lv.SYMBOL, name)
+
+
 def symbol(name):
-    return getattr(lv.SYMBOL, name, lv.SYMBOL.OK)
+    return getattr(lv.SYMBOL, name) if symbol_known(name) else lv.SYMBOL.OK
 
 
 def split_kv(item, sep=":"):
-    """'SYMBOL:text' -> ('SYMBOL', 'text'); splits on the FIRST sep only."""
+    """'SYMBOL:text' -> ('SYMBOL', 'text'); splits on the FIRST sep only.
+    An item with no separator is all text (with a default symbol)."""
+    if sep not in item:
+        return "OK", item.strip()
     k, _, v = item.partition(sep)
     return k.strip(), v.strip()
 
 
-def to_int(s, default=0):
+def to_int(s, default=0, lo=0, hi=100):
+    """Clamped int: content numbers can never overflow LVGL's machine word."""
     try:
-        return int(s)
-    except ValueError:
+        v = int(s)
+    except (ValueError, OverflowError):
         return default
+    return lo if v < lo else hi if v > hi else v
+
+
+def items(fields, kind):
+    """Cap an element's item list; returns (kept, dropped_count)."""
+    cap = MAX_ITEMS.get(kind, 64)
+    return fields[:cap], max(0, len(fields) - cap)
+
+
+def more(parent, dropped):
+    if dropped:
+        label(parent, "+%d more" % dropped, FONT_S, MUTED)
+
+
+# ---- content file reading ---------------------------------------------------
+
+def read_lines(path, offset=0):
+    """Stream (next_offset, text) per line from a content file.
+    Binary, chunked, and forgiving: \n, \r\n or \r line endings, a UTF-8
+    BOM, invalid UTF-8 (non-ASCII bytes become '?': the fonts can't show
+    them anyway), and lines longer than MAX_LINE (head kept, rest dropped).
+    Memory is bounded by the chunk size, not by file or line length.
+    next_offset is where the following line starts, so a page body can be
+    re-read later with read_lines(path, next_offset)."""
+    with open(path, "rb") as f:
+        f.seek(offset)
+        pos = offset  # file offset of buf[0]
+        buf = b""
+        keep = None   # truncated head of an over-long line
+        first = offset == 0
+        eof = False
+        while True:
+            n = buf.find(b"\n")
+            r = buf.find(b"\r")
+            k = n if r < 0 else r if n < 0 else min(n, r)
+            # a trailing \r may be half of \r\n: wait for the next chunk
+            need_more = k < 0 or (buf[k] == 13 and k + 1 == len(buf))
+            if need_more and not eof:
+                chunk = f.read(256)
+                if chunk:
+                    buf += chunk
+                    if k < 0 and len(buf) > MAX_LINE:
+                        if keep is None:
+                            keep = buf[:MAX_LINE]
+                        pos += len(buf)
+                        buf = b""
+                    continue
+                eof = True
+            if k < 0:
+                if not buf and keep is None:
+                    return
+                k = end = len(buf)
+            else:
+                end = k + 1
+                if buf[k] == 13 and end < len(buf) and buf[end] == 10:
+                    end += 1
+            raw = keep if keep is not None else buf[:k]
+            keep = None
+            buf = buf[end:]
+            pos += end
+            if first:
+                first = False
+                if raw[:3] == b"\xef\xbb\xbf":
+                    raw = raw[3:]
+            raw = raw[:MAX_LINE]
+            try:
+                text = raw.decode()
+            except UnicodeError:
+                text = None
+            if text is None or any(ord(c) > 127 for c in text):
+                # rare path: invalid UTF-8 or glyphs the fonts lack
+                text = "".join(chr(b) if b < 128 else "?" for b in raw)
+            yield pos, text
+
+
+def is_header(text):
+    return text.startswith("=") and (len(text) == 1 or text[1] in " \t")
+
+
+def header_title(text):
+    return text[1:].strip() or "Untitled"
 
 
 # ---- element renderers: f(parent, fields, ctx) ---------------------------
@@ -202,6 +307,7 @@ def el_hero(parent, f, ctx):
 
 
 def el_stats(parent, f, ctx):
+    f, dropped = items(f, "stats")
     r = row(parent, 6)
     for item in f:
         value, name = split_kv(item)
@@ -213,6 +319,7 @@ def el_stats(parent, f, ctx):
         tile.set_style_pad_ver(4, 0)
         label(tile, value, FONT_M, ACCENT)
         label(tile, name, FONT_S, MUTED)
+    more(parent, dropped)
 
 
 def el_hint(parent, f, ctx):
@@ -243,6 +350,7 @@ def el_muted(parent, f, ctx):
 
 
 def el_list(parent, f, ctx):
+    f, dropped = items(f, "list")
     col = column(parent, 4)
     for item in f:
         sym, text = split_kv(item)
@@ -251,14 +359,18 @@ def el_list(parent, f, ctx):
         t = wrapped(r, text, FONT_S, TEXT)
         t.set_flex_grow(1)
         t.set_width(0)  # let flex-grow decide; wrap within it
+    more(col, dropped)
 
 
 def el_meters(parent, f, ctx):
+    f, dropped = items(f, "meters")
     c = card(parent)
     c.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     c.set_style_pad_row(8, 0)
     for item in f:
         name, val = item.rpartition(":")[0].strip(), to_int(item.rpartition(":")[2])
+        if not name:
+            name, val = item.strip(), 0
         r = row(c, 8)
         n = label(r, name, FONT_S, TEXT)
         n.set_width(110)
@@ -268,6 +380,7 @@ def el_meters(parent, f, ctx):
         v = label(r, "%d%%" % val, FONT_S, MUTED)
         v.set_width(40)
         v.set_style_text_align(lv.TEXT_ALIGN.RIGHT, 0)
+    more(c, dropped)
 
 
 def el_chips(parent, f, ctx):
@@ -275,8 +388,10 @@ def el_chips(parent, f, ctx):
         el_title(parent, f[:1], ctx)
     color = _color(ctx)
     w = wrap_row(parent, 6)
-    for item in f[1:]:
+    chips_, dropped = items(f[1:], "chips")
+    for item in chips_:
         chip(w, item, color)
+    more(w, dropped)
 
 
 def el_card(parent, f, ctx):
@@ -287,13 +402,12 @@ def el_card(parent, f, ctx):
     label(c, name, FONT_M, TEXT)
     wrapped(c, body, FONT_S, MUTED)
     r = row(c, 4)
-    for t in tags.split(","):
-        if t.strip():
-            chip(r, t.strip(), ACCENT)
+    for t in [x.strip() for x in tags.split(",") if x.strip()][:4]:
+        chip(r, t, ACCENT)
     sp = bare(lv.obj(r))
     sp.set_flex_grow(1)
     sp.set_height(1)
-    n = min(max(to_int(stars), 0), 5)
+    n = to_int(stars, 0, 0, 5)
     for i in range(5):
         dot(r, 8, ACCENT_2 if i < n else SURFACE_2)
 
@@ -332,8 +446,10 @@ def el_step(parent, f, ctx):
 
 
 def el_chart(parent, f, ctx):
-    values = [to_int(v) for v in (f[0] if f else "").split(",") if v.strip()]
+    values = [to_int(v, 0, 0, 1000000) for v in (f[0] if f else "").split(",") if v.strip()]
     labels = [s.strip() for s in (f[1] if len(f) > 1 else "").split(",")]
+    values, _ = items(values, "chart")
+    labels = labels[:len(values)]
     c = card(parent)
     c.set_style_pad_all(4, 0)
     ch = lv.chart(c)
@@ -378,10 +494,14 @@ def el_media(parent, f, ctx):
 
 
 def el_grid(parent, f, ctx):
+    f, dropped = items(f, "grid")
     w = wrap_row(parent, 8)
     for item in f:
         sym, rest = split_kv(item)
-        name, level = rest.rpartition(":")[0].strip(), to_int(rest.rpartition(":")[2])
+        if ":" in rest:
+            name, level = rest.rpartition(":")[0].strip(), to_int(rest.rpartition(":")[2])
+        else:
+            name, level = rest, 0
         color = _color(ctx)
         t = card(w)
         t.set_size(148, 86)  # 2 x 148 + 8 gap = 304 = usable width
@@ -394,6 +514,7 @@ def el_grid(parent, f, ctx):
         n.set_style_text_align(lv.TEXT_ALIGN.CENTER, 0)
         b = bar(t, level, color, 4)
         b.set_width(lv.pct(100))
+    more(parent, dropped)
 
 
 def el_qr(parent, f, ctx):
@@ -441,23 +562,54 @@ def parse(line):
     return parts[0].lower(), parts[1:]
 
 
+# Rough widgets-per-element, after item caps: keeps a page's LVGL footprint
+# bounded so allocation can't fail inside LVGL (which would crash, not raise).
+def estimate(kind, fields):
+    n = len(fields)
+    cap = MAX_ITEMS.get(kind, 64)
+    m = min(n, cap)
+    if kind == "hero": return 8
+    if kind == "stats": return 3 * m + 1
+    if kind == "list": return 4 * m + 1
+    if kind == "meters": return 5 * m + 1
+    if kind == "chips": return 2 * min(max(n - 1, 0), cap) + 4
+    if kind == "card": return 12 + 2 * min(len(fields[2].split(",")) if n > 2 else 0, 4)
+    if kind == "step": return 8
+    if kind == "chart": return 3 + min(len(fields[1].split(",")) if n > 1 else 0, cap)
+    if kind == "media": return 6
+    if kind == "grid": return 5 * m + 1
+    return 4  # title / text / muted / hint / qr / footer / unknown
+
+
+NEEDS_FIELDS = ("hero", "stats", "list", "meters", "chips", "card", "step",
+                "chart", "media", "grid", "qr")
+
+
 def render_page(parent, lines):
-    """Build a page from its text lines. Unknown kinds and over-cap lines
-    render as visible warnings instead of failing, so a typo in the content
-    file never takes the app down."""
+    """Build a page from its text lines. Unknown kinds, empty structural
+    elements, over-cap pages and over-budget pages all render as visible
+    warnings instead of failing, so a mistake in the content file never
+    takes the app down."""
     init()
-    parsed = [p for p in (parse(l) for l in lines) if p]
+    parsed = [p for p in (parse(l) for l in lines) if p][:MAX_ELEMENTS + 1]
     col = column(parent, 8)
     ctx = {"cycle": 0, "first_step": True, "next": None, "i": 0}
+    cost = sum(estimate(k, f) for k, f in parsed[:MAX_ELEMENTS])
+    if cost > MAX_OBJECTS:
+        wrapped(col, "! page too complex: about %d widgets, max %d - split it"
+                % (cost, MAX_OBJECTS), FONT_S, WARN)
+        return col
     for i, (kind, fields) in enumerate(parsed[:MAX_ELEMENTS]):
         ctx["i"] = i
         ctx["next"] = parsed[i + 1][0] if i + 1 < len(parsed) else None
         fn = RENDERERS.get(kind)
         if fn is None:
             wrapped(col, "? unknown element: " + kind, FONT_S, WARN)
+        elif kind in NEEDS_FIELDS and not any(fields):
+            wrapped(col, "? empty " + kind, FONT_S, WARN)
         else:
             fn(col, fields, ctx)
     if len(parsed) > MAX_ELEMENTS:
-        wrapped(col, "! page has %d elements, max %d" % (len(parsed), MAX_ELEMENTS),
+        wrapped(col, "! more than %d elements on this page - split it" % MAX_ELEMENTS,
                 FONT_S, WARN)
     return col

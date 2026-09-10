@@ -18,7 +18,7 @@ class PortfolioApp:
         ui.init()
         self.path = path
         self.index = 0
-        self.pages = self._scan()  # [(title, byte offset of first body line)]
+        self.pages = self._scan()  # [(title, offset of first body line)]
 
         self.scr = lv.obj()
         self.scr.set_style_bg_color(ui.BG, 0)
@@ -44,32 +44,33 @@ class PortfolioApp:
     # -- content file ------------------------------------------------------
 
     def _scan(self):
-        """One pass over the file: page titles and where each body starts."""
+        """One bounded pass over the file: page titles and body offsets.
+        Any failure becomes a single explanatory page instead of a crash."""
         pages = []
         try:
-            with open(self.path) as f:
-                while True:
-                    line = f.readline()
-                    if not line:
-                        break
-                    if line.startswith("= "):
-                        pages.append((line[2:].strip(), f.tell()))
+            for nxt, text in ui.read_lines(self.path):
+                if ui.is_header(text):
+                    pages.append((ui.header_title(text), nxt))
+            if not pages:
+                return [("No pages", "muted | %s has no '= Title' page headers." % self.path)]
         except OSError:
-            pass
-        return pages or [("No content", -1)]
+            return [("No content", "muted | %s not found on the board. Copy it with: lvmp install"
+                     % self.path)]
+        except MemoryError:
+            return [("No content", "muted | not enough memory to read %s" % self.path)]
+        return pages
 
     def _page_lines(self, index):
         title, offset = self.pages[index]
-        if offset < 0:
-            return ["muted | %s not found on the board. Copy it with: lvmp install" % self.path]
+        if isinstance(offset, str):
+            return [offset]  # a synthetic explanatory page
         lines = []
-        with open(self.path) as f:
-            f.seek(offset)
-            while True:
-                line = f.readline()
-                if not line or line.startswith("= "):
-                    break
-                lines.append(line)
+        for nxt, text in ui.read_lines(self.path, offset):
+            if ui.is_header(text):
+                break
+            lines.append(text)
+            if len(lines) > ui.MAX_ELEMENTS + 8:
+                break  # over-cap pages are reported by the engine; stop reading
         return lines
 
     # -- chrome ------------------------------------------------------------
@@ -87,6 +88,9 @@ class PortfolioApp:
         self.btn_prev = self._nav_button(bar, lv.SYMBOL.LEFT, lv.ALIGN.LEFT_MID, -1)
         self.btn_next = self._nav_button(bar, lv.SYMBOL.RIGHT, lv.ALIGN.RIGHT_MID, 1)
         self.lbl_title = ui.label(bar, "", ui.FONT_M, ui.TEXT)
+        self.lbl_title.set_long_mode(lv.label.LONG_MODE.DOTS)
+        self.lbl_title.set_width(160)
+        self.lbl_title.set_style_text_align(lv.TEXT_ALIGN.CENTER, 0)
         self.lbl_title.align(lv.ALIGN.CENTER, 0, 0)
         self.lbl_count = ui.label(bar, "", ui.FONT_S, ui.MUTED)
         self.lbl_count.align(lv.ALIGN.RIGHT_MID, -44, 0)
