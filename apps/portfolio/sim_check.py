@@ -1,15 +1,21 @@
-# Headless smoke test: build every portfolio page against a dummy 320x240
-# display and report per-page object counts, build time, and heap cost.
+# Headless check for the text-driven portfolio: validates the content file
+# and builds every page against a dummy 320x240 display.
 #
-# Run from this directory with the unix lv_micropython binary:
 #   cd apps/portfolio
-#   ../../ports/unix/build-standard/micropython sim_check.py [page_number]
+#   ../../ports/unix/build-standard/micropython sim_check.py [content.txt] [page]
 #
-# Exit code 0 = all pages built and rendered without an exception.
+# Content lint (any file, any author): unknown element kinds, more than
+# MAX_ELEMENTS per page, non-ASCII text, unknown lv.SYMBOL names.
+# Render check: per-page object count, build time, heap cost, widgets
+# poking past the usable width, and navigation wrap-around with the same
+# low-memory guards the device uses. Run with -X heapsize=110k to mirror a
+# no-PSRAM ESP32. Exit code 0 = clean.
 
 import sys
 import gc
 import time
+
+sys.path.insert(0, "../../ports/esp32/modules")
 
 import lvgl as lv
 
@@ -17,25 +23,70 @@ if hasattr(lv, "init"):
     lv.init()
 
 HOR, VER = 320, 240
-
 disp = lv.display_create(HOR, VER)
-# Same size as the ili9xxx driver's buffer on the device (factor=8), so a
-# heap-constrained run (-X heapsize=110k) mirrors a no-PSRAM ESP32.
-buf = bytearray(HOR * 30 * 2)
+buf = bytearray(HOR * 30 * 2)  # same size as the ili9xxx driver's buffer
 disp.set_buffers(buf, None, len(buf), lv.DISPLAY_RENDER_MODE.PARTIAL)
 disp.set_flush_cb(lambda d, area, px: d.flush_ready())
 
-from portfolio.app import PortfolioApp
-from portfolio.data import PORTFOLIO
-from portfolio.pages import PAGES
+import portfolio_ui as ui
+from portfolio_app import PortfolioApp
 
+path = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].isdigit() else "portfolio.txt"
+only = int(sys.argv[-1]) if len(sys.argv) > 1 and sys.argv[-1].isdigit() else None
+failures = 0
+
+
+def fail(msg):
+    global failures
+    failures += 1
+    print("FAIL", msg)
+
+
+# ---- 1. content lint --------------------------------------------------------
+
+SYMBOL_FIELDS = {"list": 0, "media": 0, "grid": 0}  # kind -> field index holding SYMBOL:...
+page_no, count, title = 0, 0, ""
+with open(path) as f:
+    for n, raw in enumerate(f, 1):
+        if any(ord(c) > 127 for c in raw):
+            fail("line %d: non-ASCII character (fonts have no such glyph)" % n)
+        if raw.startswith("= "):
+            page_no += 1
+            count, title = 0, raw[2:].strip()
+            continue
+        p = ui.parse(raw)
+        if not p:
+            continue
+        kind, fields = p
+        count += 1
+        if kind not in ui.RENDERERS:
+            fail("line %d (%s): unknown element kind %r" % (n, title, kind))
+        if count == ui.MAX_ELEMENTS + 1:
+            fail("page %r: more than %d elements" % (title, ui.MAX_ELEMENTS))
+        if kind in ("list", "grid"):
+            for item in fields:
+                sym = item.split(":", 1)[0].strip()
+                if not hasattr(lv.SYMBOL, sym):
+                    fail("line %d: unknown symbol %r" % (n, sym))
+        elif kind == "media" and fields and not hasattr(lv.SYMBOL, fields[0]):
+            fail("line %d: unknown symbol %r" % (n, fields[0]))
+print("lint: %d pages in %s, %d problem(s)" % (page_no, path, failures))
+
+
+# ---- 2. render every page ---------------------------------------------------
 
 def count_objs(obj):
     n = obj.get_child_count()
-    total = n
-    for i in range(n):
-        total += count_objs(obj.get_child(i))
-    return total
+    return n + sum(count_objs(obj.get_child(i)) for i in range(n))
+
+
+def overflow(obj, out, limit=HOR - 8):
+    for i in range(obj.get_child_count()):
+        c = obj.get_child(i)
+        if c.get_x() + c.get_width() > limit + 1 and c.get_width() > 0:
+            out.append("%dpx wide at x=%d" % (c.get_width(), c.get_x()))
+        overflow(c, out, limit)
+    return out
 
 
 def pump(ms=400, step=20):
@@ -44,53 +95,44 @@ def pump(ms=400, step=20):
         lv.timer_handler()
 
 
-app = PortfolioApp(PORTFOLIO)
+app = PortfolioApp(path)
 app.start()
 pump()
 
-only = None
-if len(sys.argv) > 1:
-    only = int(sys.argv[1])
-
-failures = 0
-for i in range(len(PAGES)):
+for i in range(len(app.pages)):
     if only is not None and i + 1 != only:
         continue
-    name = PAGES[i][0]
+    name = app.pages[i][0]
     gc.collect()
-    mem_before = gc.mem_alloc()
+    before = gc.mem_alloc()
     t0 = time.ticks_ms()
     try:
         app.show_page(i)
-        pump()  # let animations/timers tick and layouts settle
-        elapsed = time.ticks_diff(time.ticks_ms(), t0)
+        pump()
+        ms = time.ticks_diff(time.ticks_ms(), t0)
         objs = count_objs(app.content)
         gc.collect()
-        mem_kb = (gc.mem_alloc() - mem_before) / 1024
+        kb = (gc.mem_alloc() - before) / 1024
         note = ""
-        if app._page_mod is None:
-            note += " DEGRADED:low-memory notice shown"
-        if objs > 90:
-            note += " WARN:objs>90"
-        if mem_kb > 40:
-            note += " WARN:mem>40KB"
-        print("PASS %-16s objs=%-3d build=%dms mem=%.1fKB%s"
-              % (name, objs, elapsed, mem_kb, note))
+        if objs <= 1 and app.content.get_child_count() == 1:
+            note += " DEGRADED:low-memory notice"
+        spill = overflow(app.content, [])
+        if spill:
+            note += " OVERFLOW:" + spill[0]
+            failures += 1
+        print("PASS %-14s objs=%-3d build=%dms mem=%.1fKB%s" % (name, objs, ms, kb, note))
     except Exception as e:
-        failures += 1
-        print("FAIL %-16s %s: %s" % (name, type(e).__name__, e))
+        fail("%s: %s: %s" % (name, type(e).__name__, e))
         sys.print_exception(e)
 
-# Exercise navigation the way a user would: wrap forward past the end.
 if only is None and failures == 0:
     try:
-        for _ in range(len(PAGES) + 1):
+        for _ in range(len(app.pages) + 1):
             app.step(1)
             pump(100)
         print("PASS navigation wrap-around")
     except Exception as e:
-        failures += 1
-        print("FAIL navigation: %s: %s" % (type(e).__name__, e))
+        fail("navigation: %s: %s" % (type(e).__name__, e))
         sys.print_exception(e)
 
 print("---")

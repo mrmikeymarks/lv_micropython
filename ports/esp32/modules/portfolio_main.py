@@ -14,14 +14,13 @@ import hw_esp32
 # From here the display works, so any failure can be shown on the panel
 # instead of only on a serial console nobody is watching.
 try:
-    from portfolio_app import PortfolioApp
-    from portfolio_data import PORTFOLIO
+    from portfolio_app import PortfolioApp, DEFAULT_PATH
 
-    app = PortfolioApp(PORTFOLIO, hor_res=hw_esp32.disp.width,
+    app = PortfolioApp(DEFAULT_PATH, hor_res=hw_esp32.disp.width,
                        ver_res=hw_esp32.disp.height)
     app.start()
-    print("portfolio loaded:", PORTFOLIO["name"], "-",
-          hw_esp32.disp.width, "x", hw_esp32.disp.height)
+    print("portfolio loaded:", len(app.pages), "pages from", DEFAULT_PATH,
+          "-", hw_esp32.disp.width, "x", hw_esp32.disp.height)
 except Exception as e:
     import sys
     sys.print_exception(e)
