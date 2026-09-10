@@ -12,10 +12,15 @@
 # no-PSRAM ESP32. Exit code 0 = clean.
 
 import sys
+import os
 import gc
 import time
 
-sys.path.insert(0, "../../ports/esp32/modules")
+# On the device the engine is frozen (no compile step). For heap-tier runs
+# point PORTFOLIO_MODULES at a directory of mpy-cross output so the test
+# doesn't pay a source-compile spike the board never sees:
+#   lvmp sim-stage   # or: mpy-cross -o stage/portfolio_ui.mpy ...
+sys.path.insert(0, os.getenv("PORTFOLIO_MODULES") or "../../ports/esp32/modules")
 
 import lvgl as lv
 
