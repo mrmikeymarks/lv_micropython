@@ -1,28 +1,34 @@
-# Emulator sweep: catches LVGL v8-to-v9 porting mistakes and dead controls.
+# Emulator sweep for the portfolio engine: catches LVGL v8-to-v9 porting
+# mistakes and dead controls.
 #
-#   1. API audit - every `lv.<...>` attribute chain that appears anywhere in
-#      the app source is resolved against the running LVGL 9 binding, so a
-#      v8-era name (lv.btn, lv.scr_act, lv.ALIGN.IN_...) fails here even if
-#      no test happens to execute that line. Known v8 relic patterns are
-#      also grepped explicitly.
-#   2. Interaction walk - drives the app the way a finger would: clicks the
-#      real header prev/next buttons through the whole page ring (forward
-#      and back), fires click events on every clickable widget of every
-#      page, and pokes the gesture handler. Verifies the header title
-#      tracks each page module's TITLE.
+#   1. API audit - every `lv.<...>` attribute chain in the engine sources is
+#      resolved against the running LVGL 9 binding, so a v8-era name
+#      (lv.btn, lv.scr_act, clear_flag) fails even on a line no test hits.
+#   2. Interaction walk - clicks the real prev/next buttons through the whole
+#      page ring both ways, checks the header title tracks the content file,
+#      fires click events on every clickable widget of every page, and pokes
+#      the gesture handler with no input device attached.
 #
-# Run from this directory with the unix lv_micropython binary:
-#   ../../ports/unix/build-standard/micropython emu_check.py
+#   cd apps/portfolio && ../../ports/unix/build-standard/micropython emu_check.py [content.txt]
 # Exit code 0 = clean.
 
 import sys
+import os
 import gc
+
+sys.path.insert(0, os.getenv("PORTFOLIO_MODULES") or "../../ports/esp32/modules")
 
 import lvgl as lv
 
 if hasattr(lv, "init"):
     lv.init()
 
+MODULES = "../../ports/esp32/modules/"
+SOURCES = tuple(MODULES + m for m in (
+    "portfolio_ui.py", "portfolio_app.py", "portfolio_main.py", "portfolio_launcher.py"))
+V8_RELICS = ("lv.btn", "lv.scr_act", "lv.disp_drv", "lv.indev_drv", "scr_load(",
+             "lv.task_handler", "set_style_local_", "lv.ALIGN.IN_", "get_act(",
+             "lv.btnmatrix", "lv.img(", "lv.img.", "clear_flag(")
 failures = 0
 
 
@@ -32,39 +38,19 @@ def fail(msg):
     print("FAIL", msg)
 
 
-# --- 1. static API audit ---------------------------------------------------
-
-V8_RELICS = (
-    "lv.btn", "lv.scr_act", "lv.disp_drv", "lv.indev_drv", "scr_load(",
-    "lv.task_handler", "set_style_local_", "lv.ALIGN.IN_", "get_act(",
-    "lv.STATE.CHECKED_", "lv.btnmatrix", "lv.img(", "lv.img.",
-    "clear_flag(",  # v9 renamed to remove_flag
-)
-
-SOURCES = (
-    "main.py",
-    "portfolio/theme.py",
-    "portfolio/app.py",
-    "portfolio/data.py",
-    "portfolio/pages/__init__.py",
-) + tuple("portfolio/pages/p%02d_%s.py" % (i + 1, n) for i, n in enumerate((
-    "home", "about", "skills", "stack", "projects",
-    "experience", "opensource", "media", "interests", "contact")))
-
-
 def _ident(ch):
     return ch.isalpha() or ch.isdigit() or ch == "_"
 
 
 def _chains(src):
-    """Yield every dotted attribute chain rooted at `lv.` in the source.
-    MicroPython's re has no finditer, so scan by hand."""
+    """Every dotted attribute chain rooted at `lv.` (MicroPython's re has no
+    finditer, so scan by hand)."""
     i = 0
     while True:
         i = src.find("lv.", i)
         if i < 0:
             return
-        if i > 0 and _ident(src[i - 1]):  # part of a longer name, e.g. mylv.
+        if i > 0 and _ident(src[i - 1]):
             i += 3
             continue
         j = i + 3
@@ -76,8 +62,7 @@ def _chains(src):
             if k == j:
                 break
             parts.append(src[j:k])
-            if k < len(src) and src[k] == "." and k + 1 < len(src) \
-                    and _ident(src[k + 1]):
+            if k + 1 < len(src) and src[k] == "." and _ident(src[k + 1]):
                 j = k + 1
             else:
                 break
@@ -94,11 +79,7 @@ def audit_api():
         except OSError:
             fail("source missing: " + path)
             continue
-        # Audit code, not prose: strip comments, and skip lines that probe
-        # optional API themselves (hasattr-guarded, e.g. lv.init on ESP32).
-        src = "\n".join(
-            line.split("#", 1)[0] for line in src.split("\n")
-            if "hasattr(lv" not in line)
+        src = "\n".join(l.split("#", 1)[0] for l in src.split("\n") if "hasattr(lv" not in l)
         for pat in V8_RELICS:
             if pat in src:
                 fail("v8 relic %r in %s" % (pat, path))
@@ -111,13 +92,10 @@ def audit_api():
                 try:
                     obj = getattr(obj, part)
                 except AttributeError:
-                    fail("lv.%s not in this LVGL binding (used in %s)"
-                         % (chain, path))
+                    fail("lv.%s not in this LVGL binding (used in %s)" % (chain, path))
                     break
     print("api audit: %d distinct lv.* chains resolved" % len(checked))
 
-
-# --- 2. interaction walk ---------------------------------------------------
 
 def pump(ms=200, step=20):
     for _ in range(ms // step):
@@ -134,54 +112,36 @@ def clickables(obj, out):
     return out
 
 
-def walk_app():
+def walk_app(path):
     disp = lv.display_create(320, 240)
     buf = bytearray(320 * 30 * 2)
     disp.set_buffers(buf, None, len(buf), lv.DISPLAY_RENDER_MODE.PARTIAL)
     disp.set_flush_cb(lambda d, area, px: d.flush_ready())
+    from portfolio_app import PortfolioApp
 
-    from portfolio.app import PortfolioApp
-    from portfolio.data import PORTFOLIO
-    from portfolio.pages import PAGES
-
-    app = PortfolioApp(PORTFOLIO)
+    app = PortfolioApp(path)
     app.start()
     pump()
-
-    n = len(PAGES)
-
-    # Ring forward via the real next button, checking title wiring per page.
+    n = len(app.pages)
     for expect in list(range(1, n)) + [0]:
         app.btn_next.send_event(lv.EVENT.CLICKED, None)
         pump()
         if app.index != expect:
-            fail("next-click landed on page %d, expected %d"
-                 % (app.index + 1, expect + 1))
-        want = getattr(app._page_mod, "TITLE", PAGES[app.index][1]) \
-            if app._page_mod else PAGES[app.index][1]
-        got = app.lbl_title.get_text()
-        if got != want:
-            fail("header title %r != page TITLE %r on page %d"
-                 % (got, want, app.index + 1))
+            fail("next-click landed on page %d, expected %d" % (app.index + 1, expect + 1))
+        if app.lbl_title.get_text() != app.pages[app.index][0]:
+            fail("header title %r != content title %r" % (app.lbl_title.get_text(), app.pages[app.index][0]))
     print("nav ring forward: all %d pages reachable by next-button" % n)
-
-    # And backwards.
     for expect in [n - 1] + list(range(n - 2, -1, -1)):
         app.btn_prev.send_event(lv.EVENT.CLICKED, None)
         pump()
         if app.index != expect:
-            fail("prev-click landed on page %d, expected %d"
-                 % (app.index + 1, expect + 1))
+            fail("prev-click landed on page %d, expected %d" % (app.index + 1, expect + 1))
     print("nav ring backward: all %d pages reachable by prev-button" % n)
-
-    # Gesture handler must be a no-op without a real input device.
     before = app.index
     app.scr.send_event(lv.EVENT.GESTURE, None)
     pump()
     if app.index != before:
         fail("gesture with no indev changed the page")
-
-    # Click every clickable widget on every page; nothing may raise.
     for i in range(n):
         app.show_page(i)
         pump()
@@ -192,17 +152,15 @@ def walk_app():
             t.send_event(lv.EVENT.RELEASED, None)
         pump()
         gc.collect()
-        print("page %-2d %-16s: %d clickables poked"
-              % (i + 1, PAGES[i][0], len(targets)))
+        print("page %-2d %-14s: %d clickables poked" % (i + 1, app.pages[i][0], len(targets)))
 
 
 audit_api()
 try:
-    walk_app()
+    walk_app(sys.argv[1] if len(sys.argv) > 1 else "portfolio.txt")
 except Exception as e:
     fail("interaction walk aborted: %s: %s" % (type(e).__name__, e))
     sys.print_exception(e)
-
 print("---")
 print("%d failure(s)" % failures)
 sys.exit(1 if failures else 0)

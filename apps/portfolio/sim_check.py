@@ -19,7 +19,7 @@ import time
 # On the device the engine is frozen (no compile step). For heap-tier runs
 # point PORTFOLIO_MODULES at a directory of mpy-cross output so the test
 # doesn't pay a source-compile spike the board never sees:
-#   lvmp sim-stage   # or: mpy-cross -o stage/portfolio_ui.mpy ...
+#   mpy-cross -o stage/portfolio_ui.mpy ports/esp32/modules/portfolio_ui.py (and _app)
 sys.path.insert(0, os.getenv("PORTFOLIO_MODULES") or "../../ports/esp32/modules")
 
 import lvgl as lv

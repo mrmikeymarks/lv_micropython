@@ -195,7 +195,7 @@ cmd_share() {  # FILE [--branch] - online-simulator link for a committed demo
     command -v pbcopy >/dev/null && printf '%s' "$url" | pbcopy && echo "(copied to clipboard)" >&2
 }
 
-cmd_install() {  # [PORT] [--source] - install the portfolio app to the board
+cmd_install() {  # [PORT] [--launcher] - copy portfolio content to the board
     exec "$MICROPYTHON/apps/portfolio/install.sh" "$@"
 }
 
@@ -255,7 +255,7 @@ _lvmp() {
         deploy)  _describe 'board' boards; _describe 'port' ports; _values 'flag' '--full' ;;
         dev)     (( CURRENT == 3 )) && _files -g '*.py'; (( CURRENT == 4 )) && _describe 'port' ports ;;
         sim|share) _files -g '*.py' ;;
-        install) _describe 'port' ports; _values 'flag' '--source' ;;
+        install) _describe 'port' ports; _values 'flag' '--launcher' ;;
         log)     _values 'flag' '--reset' '--timestamps'; _describe 'port' ports ;;
     esac
 }
@@ -279,7 +279,7 @@ _lvmp() {
             esac ;;
         deploy)  COMPREPLY=($(compgen -W "$boards $ports --full" -- "$cur")) ;;
         dev|sim|share) COMPREPLY=($(compgen -f -X '!*.py' -- "$cur") $(compgen -W "$ports" -- "$cur")) ;;
-        install) COMPREPLY=($(compgen -W "$ports --source" -- "$cur")) ;;
+        install) COMPREPLY=($(compgen -W "$ports --launcher" -- "$cur")) ;;
         log)     COMPREPLY=($(compgen -W "--reset --timestamps $ports" -- "$cur")) ;;
     esac
 }
@@ -300,7 +300,7 @@ lvmp <command> [args]
   deploy  [BOARD] [PORT] [BAUD] [--full]
                                       fast esptool flash of an existing build (app-only by default)
   erase   [BOARD] [VARIANT]           erase the board's flash
-  install [PORT] [--source]           install the portfolio app only
+  install [PORT] [--launcher]         copy portfolio.txt + main.py to the board (no rebuild)
   dev     [FILE] [PORT]               push FILE as main.py, reset, watch serial
   log     [--reset] [--timestamps] [PORT] [BAUD]
                                       serial monitor (auto-reconnects)

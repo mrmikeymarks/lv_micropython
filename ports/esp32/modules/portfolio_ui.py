@@ -304,13 +304,13 @@ def el_step(parent, f, ctx):
     r.set_flex_align(lv.FLEX_ALIGN.START, lv.FLEX_ALIGN.START, lv.FLEX_ALIGN.START)
     gutter = column(r, 0)
     gutter.set_width(12)
-    gutter.set_height(lv.pct(100))
     gutter.set_flex_align(lv.FLEX_ALIGN.START, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
     dot(gutter, 10, ACCENT if ctx["first_step"] else BORDER)
     ctx["first_step"] = False
-    if ctx["next"] == "step":
+    connect = ctx["next"] == "step"
+    if connect:
         line = lv.obj(gutter)
-        line.set_size(2, lv.pct(100))
+        line.set_width(2)
         line.set_style_bg_color(SURFACE_2, 0)
         line.set_style_bg_opa(lv.OPA.COVER, 0)
         line.set_style_border_width(0, 0)
@@ -324,6 +324,11 @@ def el_step(parent, f, ctx):
     label(c, role, FONT_M, TEXT)
     label(c, org, FONT_S, MUTED)
     wrapped(c, desc, FONT_S, MUTED)
+    # A percentage height inside a content-sized row resolves to 0 and clips
+    # the gutter; size it to the finished card instead (plus the row gap so
+    # consecutive connectors meet).
+    r.update_layout()
+    gutter.set_height(c.get_height() + (8 if connect else 0))
 
 
 def el_chart(parent, f, ctx):

@@ -1,110 +1,71 @@
 # Developer Portfolio — LVGL 9.3 + MicroPython
 
-A 10-page interactive developer portfolio that runs on a 320×240 ILI9341 +
-XPT2046 touch module driven by an ESP32 — no PSRAM required. Navigate with
-the header arrows or swipe left/right.
+A swipeable multi-page portfolio for a 320×240 ILI9341 + XPT2046 touch
+module on an ESP32 — no PSRAM required. Navigate with the header arrows or
+swipe left/right.
 
-| # | Page | What it shows |
-|---|------|---------------|
-| 1 | Home | Name, role, tagline, quick stats |
-| 2 | About | Bio and quick facts |
-| 3 | Skills | Animated skill meters |
-| 4 | Stack | Tool/tech chip clouds by category |
-| 5 | Projects | Project cards with tech tags and ratings |
-| 6 | Experience | Career timeline |
-| 7 | Open Source | Contribution bar chart and repo list |
-| 8 | Talks & Media | Talks, podcasts, and posts |
-| 9 | Interests | Hobby tiles with enthusiasm meters |
-| 10 | Contact | Email/site/GitHub + scannable QR code |
+**All content is one text file.** [portfolio.txt](portfolio.txt) is the
+only thing you edit: one element per line, top to bottom, at most 7 per
+page, `= Title` starts a page. It lives on the board's filesystem and is
+streamed one page at a time, so changing your portfolio is `edit → lvmp
+install` — no firmware rebuild, no compiler on the device.
 
-> **Frozen variant:** the same app also exists as flat frozen modules in
-> `ports/esp32/modules/` (`portfolio_*.py` + `portfolio_pages/`), built into the firmware so no
-> RAM is spent on bytecode. Boot it with a one-line filesystem `main.py`:
-> `import portfolio_main` (starts immediately) or `import portfolio_launcher`
-> (standby screen; the BOOT button on GPIO0 starts it — pin configurable,
-> but not 13/25, those are the display/touch chip-selects). Keep the two
-> variants in sync (each file's header says which source it derives from).
+```
+= Skills
+title  | Languages & frameworks
+meters | MicroPython:92 | C / C++:88 | Python:90
+muted  | Self-assessed on shipped projects.
+```
 
-## Make it yours
+The format reference (all 16 element kinds) is in the header of
+`portfolio.txt` itself.
 
-All content lives in [portfolio/data.py](portfolio/data.py) — name, skills,
-projects, links, everything. Edit that one file; no page code needs to
-change. Icons are `lv.SYMBOL` names stored as strings.
+## Layout
+
+| Where | File | Role |
+|-------|------|------|
+| firmware (frozen) | `ports/esp32/modules/portfolio_ui.py` | theme + one renderer per element kind |
+| firmware (frozen) | `ports/esp32/modules/portfolio_app.py` | header/nav shell, streams pages from the file |
+| firmware (frozen) | `ports/esp32/modules/portfolio_main.py` | entry: `import portfolio_main` starts it |
+| firmware (frozen) | `ports/esp32/modules/portfolio_launcher.py` | optional: standby screen, BOOT button starts it |
+| board filesystem | `/portfolio.txt` | your content |
+| board filesystem | `/main.py` | one line: `import portfolio_main` (or `_launcher`) |
+
+The whole engine is ~11 KB of frozen bytecode; the content is ~5 KB on the
+filesystem and never occupies RAM beyond the page being shown.
 
 ## Run on hardware
 
-Flash lv_micropython firmware first (drivers are frozen in):
-
 ```bash
-./scripts/lvmp flash
+lvmp flash                  # build + flash firmware (engine frozen in), installs content
+lvmp install                # content only, after editing portfolio.txt
+lvmp install --launcher     # boot to standby; BOOT button (GPIO0) starts it
 ```
 
-Then install the app (from `apps/portfolio/`):
+Wiring lives in `ports/esp32/modules/hw_esp32.py`: `sck=19 mosi=18 miso=5`,
+display `cs=13 dc=12 rst=4 bl=15`, panel power 14, touch `cs=25`.
 
-```bash
-./install.sh
-```
+## Check content before installing
 
-Wiring matches the repo default: `sck=19 mosi=18 miso=5`, display
-`cs=13 dc=12 rst=4 bl=15`, touch `cs=25`, panel power on pin 14.
-Different wiring or panel? Edit [main.py](main.py) — everything below the
-driver setup is display-agnostic.
+Both harnesses run against the unix build of this repo (LVGL 9.3, same
+binding as the firmware — `make -C ports/unix VARIANT=standard
+USER_C_MODULES=$PWD/user_modules`), from `apps/portfolio/`:
 
-## Run headless (CI / desktop emulator)
+- `sim_check.py [file] [page]` — lints the content (unknown element kinds,
+  more than 7 per page, non-ASCII, unknown `lv.SYMBOL` names), then builds
+  every page headless and reports objects, build time, heap cost, widgets
+  spilling past the screen edge, and navigation wrap-around. Run with
+  `-X heapsize=110k` (and `PORTFOLIO_MODULES` pointing at mpy-cross output)
+  to mirror a no-PSRAM board.
+- `emu_check.py [file]` — resolves every `lv.*` name in the engine against
+  the running binding (catches v8-era API), then click-walks the real
+  prev/next buttons through the page ring both ways and fires click events
+  on every clickable widget.
 
-Build the unix port with the LVGL binding (a stale build dir causes qstr
-collisions — `make clean` first if the build was made without
-`USER_C_MODULES`), then:
+## Memory
 
-```bash
-make -C ports/unix -j8 VARIANT=standard USER_C_MODULES=$PWD/user_modules
-cd apps/portfolio && ../../ports/unix/build-standard/micropython sim_check.py
-```
-
-Two harnesses, both must exit 0:
-
-- `sim_check.py` builds every page against a dummy display and reports
-  object counts, build time, and heap cost per page (add a page number to
-  test one). Run it with `-X heapsize=110k` to mirror a no-PSRAM ESP32.
-- `emu_check.py` is the porting sweep: it resolves every `lv.*` name used
-  anywhere in the app against the running LVGL 9 binding (so a v8-era name
-  like `lv.btn` or `lv.scr_act` fails even on a line no test executes),
-  greps for known v8 relic patterns, then click-walks the real prev/next
-  buttons through the whole page ring both ways and fires click events on
-  every clickable widget of every page.
-
-This local binary is the reference implementation: it is built from the
-same `lv_binding_micropython` checkout (LVGL 9.3) the ESP32 firmware is
-built from, so what passes here is what runs on the device. The online
-simulator (sim.lvgl.io, used by `scripts/lvmp share` for single-file
-demos) is frozen at LVGL 9.0 and is **not** API-congruent — e.g. chart and
-qrcode APIs differ — so it is not a verification target for this app.
-
-## Memory budget (no-PSRAM boards)
-
-Worst case measured in the emulator (framework + heaviest page + a
-device-sized display buffer): ~80 KB. The app defends itself at runtime:
-pages are refused with a "not enough memory" notice (still navigable)
-rather than thrashing or crashing when headroom runs out.
-
-- Check your board's budget: `mpremote exec "import gc; gc.collect(); print(gc.mem_free())"`
-  right after boot. ≥ 100 KB free is comfortable; below that, freeze the
-  app into the firmware instead of installing it to the filesystem: add
-  `freeze("$(PORT_DIR)/../../apps/portfolio", "portfolio")` style entries
-  to the board manifest so the bytecode lives in flash, not RAM.
-- `install.sh` ships cross-compiled `.mpy` files by default, which avoids
-  the on-device compiler's RAM spikes at every page import (use `--source`
-  to install editable `.py` instead).
-
-## Design notes
-
-- **One page at a time.** Pages are imported lazily, built, then evicted
-  from `sys.modules` on navigation, so a no-PSRAM board only ever holds one
-  page's bytecode and widgets. Timers registered via `app.own_timer()` are
-  deleted on page change.
-- **Shared theme.** [portfolio/theme.py](portfolio/theme.py) holds the
-  palette, the three Montserrat fonts compiled into the firmware (14/16/24),
-  and small builders (`card`, `chip`, `hbar`, `title`, …) so pages stay
-  short and consistent. The page contract is documented in its header.
-- **ASCII + symbols only.** The compiled fonts cover ASCII plus LVGL's
-  symbol glyphs — no other Unicode, hence dot ratings instead of ★.
+The engine keeps ≥24 KB free before building a page and ≥12 KB after;
+otherwise it shows a "not enough memory" notice (still navigable) instead
+of thrashing. Measure your board with
+`mpremote exec "import gc; gc.collect(); print(gc.mem_free())"`.
+Fonts are montserrat 14/16/24, ASCII + `lv.SYMBOL` glyphs only.
