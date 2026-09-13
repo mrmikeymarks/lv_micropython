@@ -112,8 +112,13 @@ class Xpt2046(Xpt2046_hw):
         pos=self.pos() if z1>=16 else None
         if pos is None: data.state=0
         else: (data.point.x,data.point.y),data.state=pos,1
-        if pos is not None and irq_high:
-            self.irq=None  # pressed per SPI but PENIRQ said idle: never trust it again
+        # Pressed per SPI while PENIRQ read idle: a finger landing between the
+        # two reads can do that once, a missing/dead T_IRQ wire does it every
+        # poll - disarm only when it repeats.
+        if irq_high is not None:
+            if pos is not None and irq_high: self.irq_bad+=1
+            else: self.irq_bad=0
+            if self.irq_bad>=3: self.irq=None
         # print('#',end='')
         # switch SPI back to spiRate
         if self.spiRate: self.spi.init(baudrate=self.spiRate)
@@ -130,6 +135,7 @@ class Xpt2046(Xpt2046_hw):
         self.spiPrereadCb=spiPrereadCb
         self.irq=machine.Pin(irq,machine.Pin.IN,machine.Pin.PULL_UP) if isinstance(irq,int) else irq
         self.irq_ok=False  # True once PENIRQ has been seen low: only then is it trusted to gate polls
+        self.irq_bad=0     # consecutive polls where SPI saw a press but PENIRQ read idle
 
         import lvgl as lv
         if not lv.is_initialized(): lv.init()

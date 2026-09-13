@@ -74,12 +74,36 @@ mpr() { "$(idf_py)" "$MICROPYTHON/tools/mpremote/mpremote.py" connect "$PORT" "$
 
 # ------------------------------------------------------------- subcommands --
 
-drop_empty_lv_mp() {  # a killed generator leaves a 0-byte lv_mp.c that ninja then trusts
-    local f="$MICROPYTHON/ports/esp32/build-$BOARD${BOARD_VARIANT:+-$BOARD_VARIANT}/lv_mp.c"
+lv_mp_path() { echo "$MICROPYTHON/ports/esp32/build-$BOARD${BOARD_VARIANT:+-$BOARD_VARIANT}/lv_mp.c"; }
+
+drop_empty_lv_mp() {  # an empty lv_mp.c with a fresh mtime makes ninja skip the generator
+    local f; f="$(lv_mp_path)"
     if [ -f "$f" ] && [ ! -s "$f" ]; then
-        echo "removing empty $f (interrupted binding generation)"
+        echo "removing empty $f (stale binding placeholder)"
         rm -f "$f"
     fi
+}
+
+build_firmware() {  # make with one retry for the binding's configure-time bug:
+    # lv_binding_micropython/micropython.cmake does file(WRITE lv_mp.c "") on
+    # every CMake configure, so a reconfigure after a good build leaves an
+    # empty, newer-than-its-inputs lv_mp.c; ninja skips regeneration and the
+    # link dies with 'undefined reference to mp_module_lvgl'. Deleting the
+    # file and building again makes ninja regenerate it.
+    local log; log="$(mktemp)"
+    if make -C "$MICROPYTHON/ports/esp32" BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
+            LV_CFLAGS="-DLV_COLOR_DEPTH=16" 2>&1 | tee "$log"; then
+        rm -f "$log"; return 0
+    fi
+    if grep -q "undefined reference to .mp_module_lvgl" "$log"; then
+        rm -f "$log"
+        echo "=== binding placeholder bug hit: regenerating lv_mp.c and building again ==="
+        rm -f "$(lv_mp_path)"
+        make -C "$MICROPYTHON/ports/esp32" BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
+            LV_CFLAGS="-DLV_COLOR_DEPTH=16"
+        return $?
+    fi
+    rm -f "$log"; return 1
 }
 
 cmd_build() {  # [BOARD] [VARIANT] - build ESP32 firmware
@@ -87,8 +111,7 @@ cmd_build() {  # [BOARD] [VARIANT] - build ESP32 firmware
     espressif_env
     drop_empty_lv_mp
     make -C "$MICROPYTHON/mpy-cross"
-    make -C "$MICROPYTHON/ports/esp32" BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
-        LV_CFLAGS="-DLV_COLOR_DEPTH=16"
+    build_firmware
 }
 
 cmd_flash() {  # [BOARD] [VARIANT] [PORT] [BAUD] - build + flash + install + verify
@@ -99,8 +122,7 @@ cmd_flash() {  # [BOARD] [VARIANT] [PORT] [BAUD] - build + flash + install + ver
     echo "=== [1/6] Building mpy-cross ==="
     make -C "$MICROPYTHON/mpy-cross"
     echo "=== [2/6] Building firmware ==="
-    make -C "$MICROPYTHON/ports/esp32" BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
-        LV_CFLAGS="-DLV_COLOR_DEPTH=16"
+    build_firmware
     need_port "${3:-}"
     echo "=== [3/6] Flashing to $PORT @ $BAUD baud ==="
     make -C "$MICROPYTHON/ports/esp32" deploy BOARD="$BOARD" BOARD_VARIANT="$BOARD_VARIANT" \
