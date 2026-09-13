@@ -193,7 +193,25 @@ Under the hood it uses the binding's generic pure-Python drivers, `ili9xxx`
 and `xpt2046` (both frozen into the firmware), on SPI2 at 24 MHz:
 
 - `sck=19 mosi=18 miso=5` | display `cs=13 dc=12 rst=4 bl=15`, panel power
-  on pin 14 | touch `cs=25`
+  on pin 14 | touch `cs=33`, `T_IRQ` on 26 (lets polls skip the bus while idle)
+
+#### Touch IRQ gate (`irq=26`)
+
+The XPT2046's `T_IRQ` (PENIRQ) output is held high while nothing touches
+the panel and pulled low the moment it is pressed, at no SPI cost. With
+`irq=` set, each LVGL poll (every 80 ms) first reads that GPIO and only
+switches the shared bus to 1 MHz for a conversion while the line is low, so
+an idle screen costs one GPIO read per poll instead of a bus re-init plus a
+transaction - the display keeps the bus, and the REPL stays responsive.
+
+It cannot break touch: the gate arms only after the line has been seen low
+once (which proves the wire is there), and it disarms itself for good if a
+poll finds a press over SPI that the line claimed wasn't happening. Not
+wired, mis-wired, or a flaky jumper all fall back to plain polling. Check
+it at the REPL with `hw_esp32.touch.irq_ok` (True once a press has armed
+it); `hw_esp32.touch.irq is None` means it disarmed. PENIRQ glitches
+*during* a conversion, so it is only ever used to decide whether to read,
+never as the press signal itself. Drop the `irq=` argument to poll blind.
 
 Different wiring or panel? Edit `ports/esp32/modules/hw_esp32.py` (the
 constructors are `ili9xxx.Ili9341(spi=..., cs=, dc=, rst=, bl=, factor=,

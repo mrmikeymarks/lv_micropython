@@ -167,6 +167,12 @@ cmd_dev() {  # [FILE] [PORT] - push FILE as main.py (optional), reset, watch ser
     exec "$(idf_py)" "$SCRIPTS_DIR/monitor-serial.py" --reset "$PORT"
 }
 
+cmd_probe() {  # [PORT] - exercise every project pin from the board's REPL, print verdicts
+    need_port "${1:-}"
+    espressif_env >/dev/null 2>&1 || true
+    exec "$(idf_py)" "$SCRIPTS_DIR/pinprobe.py" "$PORT"
+}
+
 cmd_log() {  # [--reset] [--timestamps] [PORT] [BAUD] - serial monitor, no code push
     espressif_env >/dev/null 2>&1 || true
     exec "$(idf_py)" "$SCRIPTS_DIR/monitor-serial.py" "$@"
@@ -246,7 +252,7 @@ _lvmp() {
         'build:build ESP32 firmware' 'flash:build + flash + verify + install'
         'deploy:fast esptool flash of an existing build' 'erase:erase the board flash'
         'install:install the portfolio app' 'dev:push FILE as main.py, watch serial'
-        'log:serial monitor' 'sim:desktop simulator' 'share:online-simulator link'
+        'log:serial monitor' 'probe:pin probe' 'sim:desktop simulator' 'share:online-simulator link'
         'build-unix:build the desktop unix port' 'clean:remove build dirs'
         'fix-venv:re-apply IDF venv pip pins' 'env:idf.py in this shell' 'help:show help'
     )
@@ -267,6 +273,7 @@ _lvmp() {
         sim|share) _files -g '*.py' ;;
         install) _describe 'port' ports; _values 'flag' '--launcher' ;;
         log)     _values 'flag' '--reset' '--timestamps'; _describe 'port' ports ;;
+        probe)   _describe 'port' ports ;;
     esac
 }
 compdef _lvmp lvmp
@@ -275,7 +282,7 @@ EOF
     bash) cat <<'EOF'
 _lvmp() {
     local cur=${COMP_WORDS[COMP_CWORD]} cmd=${COMP_WORDS[1]:-}
-    local cmds="build flash deploy erase install dev log sim share build-unix clean fix-venv env help"
+    local cmds="build flash deploy erase install dev log probe sim share build-unix clean fix-venv env help"
     if [ "$COMP_CWORD" -eq 1 ]; then COMPREPLY=($(compgen -W "$cmds" -- "$cur")); return; fi
     local boards ports
     boards=$(lvmp boards 2>/dev/null | awk '{print $1}' | sort -u)
@@ -291,6 +298,7 @@ _lvmp() {
         dev|sim|share) COMPREPLY=($(compgen -f -X '!*.py' -- "$cur") $(compgen -W "$ports" -- "$cur")) ;;
         install) COMPREPLY=($(compgen -W "$ports --launcher" -- "$cur")) ;;
         log)     COMPREPLY=($(compgen -W "--reset --timestamps $ports" -- "$cur")) ;;
+        probe)   COMPREPLY=($(compgen -W "$ports" -- "$cur")) ;;
     esac
 }
 complete -F _lvmp lvmp
@@ -312,6 +320,7 @@ lvmp <command> [args]
   erase   [BOARD] [VARIANT]           erase the board's flash
   install [PORT] [--launcher]         copy portfolio.txt + main.py to the board (no rebuild)
   dev     [FILE] [PORT]               push FILE as main.py, reset, watch serial
+  probe   [PORT]                      test every project pin (display, touch, I2C, BOOT, free pins)
   log     [--reset] [--timestamps] [PORT] [BAUD]
                                       serial monitor (auto-reconnects)
   sim     [FILE ...]                  desktop simulator (SDL); builds it on first use
@@ -333,6 +342,7 @@ case "${1:-help}" in
     erase)       shift; cmd_erase "$@" ;;
     dev)         shift; cmd_dev "$@" ;;
     log|monitor) shift; cmd_log "$@" ;;
+    probe)       shift; cmd_probe "$@" ;;
     sim)         shift; cmd_sim "$@" ;;
     share)       shift; cmd_share "$@" ;;
     install)     shift; cmd_install "$@" ;;

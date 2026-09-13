@@ -43,7 +43,7 @@ lvmp install --launcher     # boot to standby; BOOT button (GPIO0) starts it
 ```
 
 Wiring lives in `ports/esp32/modules/hw_esp32.py`: `sck=19 mosi=18 miso=5`,
-display `cs=13 dc=12 rst=4 bl=15`, panel power 14, touch `cs=25`.
+display `cs=13 dc=12 rst=4 bl=15`, panel power 14, touch `cs=33` with `T_IRQ` on 26.
 
 ## Check content before installing
 

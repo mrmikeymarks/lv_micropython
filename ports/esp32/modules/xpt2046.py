@@ -90,6 +90,17 @@ class Xpt2046_hw(object):
 
 class Xpt2046(Xpt2046_hw):
     def indev_drv_read_cb(self, indev_drv, data):
+        # Fail-safe PENIRQ gate: until the line has proven itself by going low
+        # (panel pressed), polls go to the bus as usual. Once trusted, a high
+        # line means idle and the bus is skipped. If SPI ever finds a press
+        # while the line claimed idle, the wire is unreliable: gate disabled.
+        irq_high=None
+        if self.irq is not None:
+            irq_high=self.irq.value()
+            if not irq_high: self.irq_ok=True
+            elif self.irq_ok:
+                data.state=0
+                return
         # wait for DMA transfer (if any) before switchint SPI to 1 MHz
         if self.spiPrereadCb: self.spiPrereadCb()
         # print('.',end='')
@@ -101,19 +112,24 @@ class Xpt2046(Xpt2046_hw):
         pos=self.pos() if z1>=16 else None
         if pos is None: data.state=0
         else: (data.point.x,data.point.y),data.state=pos,1
+        if pos is not None and irq_high:
+            self.irq=None  # pressed per SPI but PENIRQ said idle: never trust it again
         # print('#',end='')
         # switch SPI back to spiRate
         if self.spiRate: self.spi.init(baudrate=self.spiRate)
 
-    def __init__(self,spi,spiRate=24_000_000,spiPrereadCb=None,**kw):
+    def __init__(self,spi,spiRate=24_000_000,spiPrereadCb=None,irq=None,**kw):
         '''XPT2046 touchscreen driver for LVGL; cf. documentation of :obj:`Xpt2046_hw` for the meaning of parameters being passed.
 
         *spiPrereadCb*: call this before reading from SPI; used to block until DMA transfer is complete (when sharing SPI bus).
         *spiRate*: the SPI bus must set to low frequency (1MHz) when reading from the XPT2046; when *spiRate* is given, the bus will be switched back to this frequency when XPT2046 is done reading. The default 24MHz targets St77xx display chips which operate at that frequency and come often with XPT2046-based touchscreen.
+        *irq*: GPIO wired to the chip's T_IRQ (PENIRQ) output. When given, each poll first reads that pin and only touches the SPI bus while it is low (panel pressed); an idle screen then costs one GPIO read per poll instead of a bus re-init and a conversion. PENIRQ glitches during conversions, so it only gates whether to read - the pressure threshold still decides a press.
         '''
         super().__init__(spi=spi,**kw)
         self.spiRate=spiRate
         self.spiPrereadCb=spiPrereadCb
+        self.irq=machine.Pin(irq,machine.Pin.IN,machine.Pin.PULL_UP) if isinstance(irq,int) else irq
+        self.irq_ok=False  # True once PENIRQ has been seen low: only then is it trusted to gate polls
 
         import lvgl as lv
         if not lv.is_initialized(): lv.init()
